@@ -9,6 +9,8 @@ export interface AppStateData {
 }
 
 export interface UseFamilySocketOptions {
+  enabled?: boolean;
+  passcode?: string | null;
   onTaskCreated?: (task: Task) => void;
   onTaskUpdated?: (task: Task) => void;
 }
@@ -24,7 +26,15 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
+  const enabled = options?.enabled ?? true;
+  const passcode = options?.passcode ?? null;
+
   useEffect(() => {
+    if (!enabled) {
+      setStatus("disconnected");
+      return;
+    }
+
     let unmounted = false;
 
     function clearTimers() {
@@ -43,7 +53,8 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
       clearTimers();
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      const qs = passcode ? `?passcode=${encodeURIComponent(passcode)}` : "";
+      const wsUrl = `${protocol}//${window.location.host}/ws${qs}`;
 
       setStatus("connecting");
       const ws = new WebSocket(wsUrl);
@@ -174,7 +185,7 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
         wsRef.current.close();
       }
     };
-  }, [queryClient]);
+  }, [queryClient, enabled, passcode]);
 
   return { status, lastHeartbeat };
 }

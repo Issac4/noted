@@ -8,6 +8,7 @@ export const memberRoleEnum = pgEnum("member_role", ["owner", "member"]);
 export const spaces = pgTable("spaces", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: text("name").notNull(),
+  passcode: text("passcode"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

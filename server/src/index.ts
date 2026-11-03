@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context, Next } from "hono";
 import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -19,6 +20,7 @@ import type {
   CreateTaskPayload,
   UpdateTaskPayload,
   SetupPayload,
+  AuthStatusResponse,
   WsMessage,
 } from "@todo-app/shared";
 
@@ -28,7 +30,55 @@ const __dirname = path.dirname(__filename);
 const app = new Hono();
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
-app.use("/api/*", cors());
+app.use(
+  "/api/*",
+  cors({
+    origin: "*",
+    allowHeaders: ["Content-Type", "x-passcode"],
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+  })
+);
+
+// Helper to resolve the active household passcode from env or DB space settings
+async function getEffectivePasscode(): Promise<{
+  space: typeof spaces.$inferSelect | null;
+  effectivePasscode: string | null;
+}> {
+  const [space] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
+  const envPasscode = process.env.APP_PASSCODE?.trim() || null;
+  const dbPasscode = space?.passcode?.trim() || null;
+  return {
+    space: space ?? null,
+    effectivePasscode: envPasscode || dbPasscode || null,
+  };
+}
+
+// Passcode security middleware for protected REST & WebSocket endpoints
+async function passcodeMiddleware(c: Context, next: Next) {
+  const { effectivePasscode } = await getEffectivePasscode();
+  if (!effectivePasscode) {
+    return next();
+  }
+
+  const headerPasscode = c.req.header("x-passcode")?.trim();
+  const queryPasscode = c.req.query("passcode")?.trim();
+  const provided = headerPasscode || queryPasscode;
+
+  if (!provided || provided !== effectivePasscode) {
+    return c.json({ error: "Unauthorized: Invalid or missing household passcode" }, 401);
+  }
+
+  return next();
+}
+
+// Protect all sensitive endpoints
+app.use("/api/state", passcodeMiddleware);
+app.use("/api/tasks", passcodeMiddleware);
+app.use("/api/tasks/*", passcodeMiddleware);
+app.use("/api/members", passcodeMiddleware);
+app.use("/api/members/*", passcodeMiddleware);
+app.use("/api/spaces", passcodeMiddleware);
+app.use("/ws", passcodeMiddleware);
 
 // Active WebSocket clients and heartbeat tracking
 interface ClientSession {
@@ -74,11 +124,15 @@ const heartbeatTimer = setInterval(() => {
 }, HEARTBEAT_INTERVAL_MS);
 heartbeatTimer.unref();
 
-// Format DB rows to shared DTOs
-function serializeSpace(row: typeof spaces.$inferSelect): Space {
+// Format DB rows to shared DTOs (never leak raw passcode)
+function serializeSpace(
+  row: typeof spaces.$inferSelect,
+  effectivePasscode: string | null
+): Space {
   return {
     id: row.id,
     name: row.name,
+    requiresPasscode: Boolean(effectivePasscode),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -111,7 +165,7 @@ function serializeTask(row: typeof tasks.$inferSelect): Task {
   };
 }
 
-// WebSocket endpoint
+// WebSocket endpoint (protected by passcodeMiddleware)
 app.get(
   "/ws",
   upgradeWebSocket(() => {
@@ -154,24 +208,36 @@ app.get(
   })
 );
 
-// Healthcheck endpoint
+// Public Healthcheck endpoint
 app.get("/api/health", async (c) => {
   try {
-    const [space] = await db.select().from(spaces).limit(1);
+    const { space, effectivePasscode } = await getEffectivePasscode();
     return c.json({
       status: "ok",
       timestamp: new Date().toISOString(),
       wsClients: clients.size,
-      defaultSpaceId: space?.id ?? null,
+      initialized: Boolean(space),
+      requiresPasscode: Boolean(effectivePasscode),
     });
   } catch (err) {
     return c.json({ status: "error", message: String(err) }, 500);
   }
 });
 
-// Full initial state endpoint (Space + Members + Tasks)
+// Public Auth Status endpoint (exposes only whether workspace is initialized and if passcode is required)
+app.get("/api/auth/status", async (c) => {
+  const { space, effectivePasscode } = await getEffectivePasscode();
+  const payload: AuthStatusResponse = {
+    initialized: Boolean(space),
+    requiresPasscode: Boolean(effectivePasscode),
+    spaceName: space?.name ?? null,
+  };
+  return c.json(payload);
+});
+
+// Protected full initial state endpoint (Space + Members + Tasks)
 app.get("/api/state", async (c) => {
-  const [space] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
+  const { space, effectivePasscode } = await getEffectivePasscode();
   if (!space) {
     return c.json({
       space: null,
@@ -193,14 +259,20 @@ app.get("/api/state", async (c) => {
     .orderBy(desc(tasks.createdAt));
 
   return c.json({
-    space: serializeSpace(space),
+    space: serializeSpace(space, effectivePasscode),
     members: spaceMembers.map(serializeMember),
     tasks: spaceTasks.map(serializeTask),
   });
 });
 
-// First-Run Setup Wizard endpoint: initialize custom Space name and Members dynamically
+// First-Run Setup Wizard endpoint: initialize custom Space name, optional Passcode, and Members dynamically
 app.post("/api/setup", async (c) => {
+  const { space: existing, effectivePasscode: envLock } = await getEffectivePasscode();
+  if (existing) {
+    return c.json({ error: "Workspace is already initialized" }, 409);
+  }
+
+  // If APP_PASSCODE is enforced via environment variable even during first-run setup, check it if provided
   const body = await c.req.json<SetupPayload>();
   const spaceName = body.spaceName?.trim();
   if (!spaceName) {
@@ -219,15 +291,14 @@ app.post("/api/setup", async (c) => {
     return c.json({ error: "At least one member is required" }, 400);
   }
 
-  // Prevent duplicate setup if a space already exists
-  const [existing] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
-  if (existing) {
-    return c.json({ error: "Workspace is already initialized" }, 409);
-  }
+  const customPasscode = body.passcode?.trim() || null;
 
   const [createdSpace] = await db
     .insert(spaces)
-    .values({ name: spaceName })
+    .values({
+      name: spaceName,
+      passcode: customPasscode,
+    })
     .returning();
 
   const createdMembers = await db
@@ -242,8 +313,9 @@ app.post("/api/setup", async (c) => {
     )
     .returning();
 
+  const finalEffectivePasscode = envLock || customPasscode;
   const statePayload = {
-    space: serializeSpace(createdSpace),
+    space: serializeSpace(createdSpace, finalEffectivePasscode),
     members: createdMembers.map(serializeMember),
     tasks: [] as Task[],
   };
@@ -254,8 +326,9 @@ app.post("/api/setup", async (c) => {
 
 // Spaces list
 app.get("/api/spaces", async (c) => {
+  const { effectivePasscode } = await getEffectivePasscode();
   const rows = await db.select().from(spaces).orderBy(asc(spaces.createdAt));
-  return c.json(rows.map(serializeSpace));
+  return c.json(rows.map((r) => serializeSpace(r, effectivePasscode)));
 });
 
 // Members list & create

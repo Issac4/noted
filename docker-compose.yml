@@ -33,6 +33,7 @@ services:
       PORT: 3000
       DATABASE_URL: postgresql://todo_admin:todo_password@db:5432/family_todo
       AUTO_MIGRATE: "true"
+      APP_PASSCODE: ${APP_PASSCODE:-}
     ports:
       - "3000:3000"
 

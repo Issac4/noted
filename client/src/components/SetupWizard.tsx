@@ -1,5 +1,15 @@
 import React, { useState } from "react";
-import { Sparkles, ArrowRight, ArrowLeft, Plus, Trash2, Check, Home, Users } from "lucide-react";
+import {
+  Sparkles,
+  ArrowRight,
+  ArrowLeft,
+  Plus,
+  Trash2,
+  Check,
+  Home,
+  Users,
+  Lock,
+} from "lucide-react";
 import type { SetupMemberInput, SetupPayload } from "@todo-app/shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,6 +32,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
 }) => {
   const [step, setStep] = useState<1 | 2>(1);
   const [spaceName, setSpaceName] = useState("Our Home");
+  const [passcode, setPasscode] = useState("");
   const [members, setMembers] = useState<SetupMemberInput[]>([
     { name: "", avatar: "🧑‍💻", role: "owner" },
     { name: "", avatar: "🌿", role: "member" },
@@ -71,6 +82,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
     onSubmit(
       {
         spaceName: spaceName.trim(),
+        passcode: passcode.trim() || null,
         members: cleanedMembers,
       },
       boundedIndex
@@ -103,7 +115,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
             className="gap-1.5 px-3 py-1 text-xs"
           >
             <Home className="w-3.5 h-3.5" />
-            1. Space Name
+            1. Space & Security
           </Badge>
           <div className="w-6 h-px bg-border" />
           <Badge
@@ -119,9 +131,9 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
           {step === 1 ? (
             <form onSubmit={handleNextStep}>
               <CardHeader>
-                <CardTitle className="text-lg">Step 1: Name Your Space</CardTitle>
+                <CardTitle className="text-lg">Step 1: Name & Protect Your Space</CardTitle>
                 <p className="text-xs text-muted-foreground">
-                  Whether for solo focus or a shared household with a partner or roommates.
+                  Configure your household name and an optional shared passcode to prevent unauthorized access.
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -137,19 +149,37 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                     className="h-11 text-base"
                     autoFocus
                   />
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {["Our Home", "Household Hub", "My Focus Space", "The Loft"].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setSpaceName(preset)}
+                        className="text-xs px-2.5 py-1 rounded-full bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {["Our Home", "Household Hub", "My Focus Space", "The Loft"].map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setSpaceName(preset)}
-                      className="text-xs px-2.5 py-1 rounded-full bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      {preset}
-                    </button>
-                  ))}
+                {/* Optional Household Passcode */}
+                <div className="space-y-2 pt-2 border-t border-border/50">
+                  <label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-primary" />
+                    Household Passcode (Optional)
+                  </label>
+                  <Input
+                    type="password"
+                    data-testid="setup-passcode-input"
+                    value={passcode}
+                    onChange={(e) => setPasscode(e.target.value)}
+                    placeholder="Leave blank for open access, or set a shared PIN/passcode"
+                    className="h-10 text-sm"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    When set, new devices or browsers must enter this passcode once to unlock the board.
+                  </p>
                 </div>
 
                 <div className="pt-2 flex justify-end">

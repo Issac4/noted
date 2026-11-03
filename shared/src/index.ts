@@ -5,6 +5,7 @@ export type MemberRole = "owner" | "member";
 export interface Space {
   id: string;
   name: string;
+  requiresPasscode: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -59,7 +60,14 @@ export interface SetupMemberInput {
 
 export interface SetupPayload {
   spaceName: string;
+  passcode?: string | null;
   members: SetupMemberInput[];
+}
+
+export interface AuthStatusResponse {
+  initialized: boolean;
+  requiresPasscode: boolean;
+  spaceName: string | null;
 }
 
 export type WsMessage =

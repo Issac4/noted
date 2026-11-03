@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -12,6 +12,7 @@ import {
   BellRing,
   CalendarClock,
   Sunrise,
+  Lock,
 } from "lucide-react";
 import type {
   Task,
@@ -19,6 +20,7 @@ import type {
   CreateTaskPayload,
   UpdateTaskPayload,
   SetupPayload,
+  AuthStatusResponse,
 } from "@todo-app/shared";
 import { useFamilySocket, type AppStateData } from "@/hooks/useFamilySocket";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,13 +29,22 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { TaskItemCard } from "@/components/TaskItemCard";
 import { SetupWizard } from "@/components/SetupWizard";
+import { PasscodeLockScreen } from "@/components/PasscodeLockScreen";
 import { parseQuickCapture, isTaskForTomorrow } from "@/lib/nlp";
 import { triggerHaptic } from "@/lib/haptics";
 
 const ACTIVE_ACTOR_STORAGE_KEY = "activeActorId";
+const PASSCODE_STORAGE_KEY = "noted_passcode";
 
 export default function App() {
   const queryClient = useQueryClient();
+
+  const [storedPasscode, setStoredPasscode] = useState<string | null>(() => {
+    return localStorage.getItem(PASSCODE_STORAGE_KEY);
+  });
+  const [isLocked, setIsLocked] = useState<boolean>(false);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [isVerifyingPin, setIsVerifyingPin] = useState<boolean>(false);
 
   const [activeActorId, setActiveActorId] = useState<string | null>(() => {
     return localStorage.getItem(ACTIVE_ACTOR_STORAGE_KEY);
@@ -53,14 +64,69 @@ export default function App() {
 
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const { data, isLoading, isError } = useQuery<AppStateData>({
-    queryKey: ["state"],
+  // Build headers with x-passcode attached when available
+  const getAuthHeaders = useCallback(
+    (overridePasscode?: string | null): Record<string, string> => {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      const code = overridePasscode !== undefined ? overridePasscode : storedPasscode;
+      if (code) {
+        headers["x-passcode"] = code;
+      }
+      return headers;
+    },
+    [storedPasscode]
+  );
+
+  // 1. Check public auth status first (/api/auth/status)
+  const { data: authStatus, isLoading: isAuthStatusLoading } = useQuery<AuthStatusResponse>({
+    queryKey: ["authStatus"],
     queryFn: async () => {
-      const res = await fetch("/api/state");
-      if (!res.ok) throw new Error("Failed to fetch workspace state");
+      const res = await fetch("/api/auth/status");
+      if (!res.ok) throw new Error("Failed to check auth status");
       return res.json();
     },
   });
+
+  // Determine whether we can query /api/state
+  const shouldFetchState = Boolean(
+    authStatus &&
+      authStatus.initialized &&
+      (!authStatus.requiresPasscode || Boolean(storedPasscode)) &&
+      !isLocked
+  );
+
+  // 2. Fetch workspace state with x-passcode header
+  const {
+    data,
+    isLoading: isStateLoading,
+    isError: isStateError,
+  } = useQuery<AppStateData>({
+    queryKey: ["state", storedPasscode],
+    enabled: shouldFetchState,
+    retry: false,
+    queryFn: async () => {
+      const res = await fetch("/api/state", {
+        headers: getAuthHeaders(),
+      });
+      if (res.status === 401) {
+        setIsLocked(true);
+        setUnlockError("Passcode required or invalid. Please unlock your household.");
+        throw new Error("Unauthorized");
+      }
+      if (!res.ok) throw new Error("Failed to fetch workspace state");
+      setIsLocked(false);
+      return res.json();
+    },
+  });
+
+  // If workspace requires passcode and none is stored in localStorage, lock immediately
+  useEffect(() => {
+    if (authStatus?.initialized && authStatus.requiresPasscode && !storedPasscode) {
+      setIsLocked(true);
+    }
+  }, [authStatus, storedPasscode]);
 
   // Sync dark mode class on <html>
   useEffect(() => {
@@ -98,8 +164,10 @@ export default function App() {
     }
   }, [data?.members, activeActorId, assigneeId]);
 
-  // WebSocket real-time sync + subtle proxy task notification banner (PRD Section 4)
+  // WebSocket real-time sync (enabled only when unlocked and initialized)
   const { status: wsStatus } = useFamilySocket({
+    enabled: Boolean(data?.space && !isLocked),
+    passcode: storedPasscode,
     onTaskCreated: (created) => {
       if (
         activeActorId &&
@@ -133,6 +201,38 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // Handle Unlock Household PIN submission
+  const handleUnlockSubmit = async (enteredPin: string) => {
+    setIsVerifyingPin(true);
+    setUnlockError(null);
+    try {
+      const res = await fetch("/api/state", {
+        headers: getAuthHeaders(enteredPin),
+      });
+      if (res.status === 401) {
+        triggerHaptic([30, 50, 30]);
+        setUnlockError("Incorrect passcode. Please try again.");
+        setIsVerifyingPin(false);
+        return;
+      }
+      if (!res.ok) {
+        throw new Error("Unable to verify passcode");
+      }
+      const stateResult = (await res.json()) as AppStateData;
+      localStorage.setItem(PASSCODE_STORAGE_KEY, enteredPin);
+      setStoredPasscode(enteredPin);
+      setIsLocked(false);
+      setUnlockError(null);
+      queryClient.setQueryData<AppStateData>(["state", enteredPin], stateResult);
+      queryClient.setQueryData<AppStateData>(["state"], stateResult);
+      triggerHaptic([15, 25, 15]);
+    } catch {
+      setUnlockError("Could not reach server to verify passcode.");
+    } finally {
+      setIsVerifyingPin(false);
+    }
+  };
+
   const setupMutation = useMutation({
     mutationFn: async ({
       payload,
@@ -144,7 +244,7 @@ export default function App() {
       setSetupError(null);
       const res = await fetch("/api/setup", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(payload.passcode || null),
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
@@ -152,14 +252,25 @@ export default function App() {
         throw new Error(errData.error || "Failed to initialize workspace");
       }
       const result = (await res.json()) as AppStateData;
-      return { result, selectedMemberIndex };
+      return { result, selectedMemberIndex, passcode: payload.passcode?.trim() || null };
     },
-    onSuccess: ({ result, selectedMemberIndex }) => {
+    onSuccess: ({ result, selectedMemberIndex, passcode }) => {
+      if (passcode) {
+        localStorage.setItem(PASSCODE_STORAGE_KEY, passcode);
+        setStoredPasscode(passcode);
+      }
+      setIsLocked(false);
       const chosenMember =
         result.members[selectedMemberIndex] || result.members[0];
       if (chosenMember) {
         selectActiveActor(chosenMember.id);
       }
+      queryClient.setQueryData<AuthStatusResponse>(["authStatus"], {
+        initialized: true,
+        requiresPasscode: Boolean(result.space?.requiresPasscode),
+        spaceName: result.space?.name ?? null,
+      });
+      queryClient.setQueryData<AppStateData>(["state", passcode], result);
       queryClient.setQueryData<AppStateData>(["state"], result);
     },
     onError: (err: Error) => {
@@ -171,14 +282,18 @@ export default function App() {
     mutationFn: async (payload: CreateTaskPayload) => {
       const res = await fetch("/api/tasks", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify(payload),
       });
+      if (res.status === 401) {
+        setIsLocked(true);
+        throw new Error("Unauthorized");
+      }
       if (!res.ok) throw new Error("Failed to create task");
       return res.json() as Promise<Task>;
     },
     onSuccess: (created) => {
-      queryClient.setQueryData<AppStateData>(["state"], (prev) => {
+      queryClient.setQueryData<AppStateData>(["state", storedPasscode], (prev) => {
         if (!prev) return prev;
         if (prev.tasks.some((t) => t.id === created.id)) return prev;
         return { ...prev, tasks: [created, ...prev.tasks] };
@@ -190,15 +305,19 @@ export default function App() {
     mutationFn: async ({ id, patch }: { id: string; patch: UpdateTaskPayload }) => {
       const res = await fetch(`/api/tasks/${id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify(patch),
       });
+      if (res.status === 401) {
+        setIsLocked(true);
+        throw new Error("Unauthorized");
+      }
       if (!res.ok) throw new Error("Failed to update task");
       return res.json() as Promise<Task>;
     },
     onMutate: async ({ id, patch }) => {
       await queryClient.cancelQueries({ queryKey: ["state"] });
-      queryClient.setQueryData<AppStateData>(["state"], (prev) => {
+      queryClient.setQueryData<AppStateData>(["state", storedPasscode], (prev) => {
         if (!prev) return prev;
         return {
           ...prev,
@@ -210,13 +329,20 @@ export default function App() {
 
   const deleteTaskMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/tasks/${id}`, {
+        method: "DELETE",
+        headers: getAuthHeaders(),
+      });
+      if (res.status === 401) {
+        setIsLocked(true);
+        throw new Error("Unauthorized");
+      }
       if (!res.ok) throw new Error("Failed to delete task");
       return id;
     },
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey: ["state"] });
-      queryClient.setQueryData<AppStateData>(["state"], (prev) => {
+      queryClient.setQueryData<AppStateData>(["state", storedPasscode], (prev) => {
         if (!prev) return prev;
         return {
           ...prev,
@@ -259,7 +385,7 @@ export default function App() {
     setForceCritical(false);
   };
 
-  if (isLoading) {
+  if (isAuthStatusLoading || (shouldFetchState && isStateLoading)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background text-muted-foreground">
         <div className="flex items-center gap-2 text-sm">
@@ -270,16 +396,8 @@ export default function App() {
     );
   }
 
-  if (isError || !data) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background text-destructive">
-        Unable to load workspace state. Please verify the server is running.
-      </div>
-    );
-  }
-
-  // First-Run Setup Wizard if no Space is initialized yet
-  if (!data.space) {
+  // 1. If workspace is NOT initialized yet, show First-Run Setup Wizard
+  if (authStatus && !authStatus.initialized) {
     return (
       <SetupWizard
         isSubmitting={setupMutation.isPending}
@@ -288,6 +406,29 @@ export default function App() {
           setupMutation.mutate({ payload, selectedMemberIndex })
         }
       />
+    );
+  }
+
+  // 2. If workspace IS initialized and requires a passcode (missing or rejected), show Unlock Household screen
+  if (
+    isLocked ||
+    (authStatus?.initialized && authStatus.requiresPasscode && !storedPasscode)
+  ) {
+    return (
+      <PasscodeLockScreen
+        spaceName={authStatus?.spaceName}
+        error={unlockError}
+        isVerifying={isVerifyingPin}
+        onUnlock={handleUnlockSubmit}
+      />
+    );
+  }
+
+  if (isStateError || !data || !data.space) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background text-destructive">
+        Unable to load workspace state. Please verify the server is running.
+      </div>
     );
   }
 
@@ -344,12 +485,14 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* Active user selector ("Viewing as") */}
+            {/* Device Identity Selector ("Who is using this device?") */}
             <div
               data-testid="actor-switcher"
               className="flex items-center gap-1 bg-secondary/60 p-1 rounded-lg border border-border/60"
             >
-              <span className="text-[11px] text-muted-foreground px-2">Identity:</span>
+              <span className="text-[11px] text-muted-foreground px-2">
+                Who is using this device?
+              </span>
               {members.map((m) => (
                 <button
                   key={m.id}
@@ -380,6 +523,24 @@ export default function App() {
             >
               {soloMode ? "👤 My Focus Only" : "👥 Dual Action Board"}
             </Button>
+
+            {/* Lock button if passcode protection is enabled */}
+            {space.requiresPasscode && (
+              <Button
+                variant="ghost"
+                size="icon"
+                data-testid="lock-button"
+                onClick={() => {
+                  localStorage.removeItem(PASSCODE_STORAGE_KEY);
+                  setStoredPasscode(null);
+                  setIsLocked(true);
+                }}
+                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                title="Lock Household on this device"
+              >
+                <Lock className="w-4 h-4" />
+              </Button>
+            )}
 
             {/* Dark / Light Mode toggle */}
             <Button
