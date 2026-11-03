@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: noted_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-todo_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-todo_password}
+      POSTGRES_DB: ${POSTGRES_DB:-family_todo}
+    command: ["postgres", "-c", "synchronous_commit=on"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-todo_admin} -d $${POSTGRES_DB:-family_todo}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  app:
+    image: ghcr.io/issac4/noted:latest
+    container_name: noted_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-todo_admin}:${POSTGRES_PASSWORD:-todo_password}@db:5432/${POSTGRES_DB:-family_todo}
+      AUTO_MIGRATE: "true"
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # Optional Watchtower service for zero-touch automatic image updates on Tiny PC
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: noted_watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_POLL_INTERVAL: 300
+    command: --interval 300 --cleanup --label-enable
+
+volumes:
+  postgres_data:
