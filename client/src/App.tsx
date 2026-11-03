@@ -30,10 +30,11 @@ import { Input } from "@/components/ui/input";
 import { TaskItemCard } from "@/components/TaskItemCard";
 import { SetupWizard } from "@/components/SetupWizard";
 import { PasscodeLockScreen } from "@/components/PasscodeLockScreen";
+import { DeviceIdentityScreen } from "@/components/DeviceIdentityScreen";
 import { parseQuickCapture, isTaskForTomorrow } from "@/lib/nlp";
 import { triggerHaptic } from "@/lib/haptics";
 
-const ACTIVE_ACTOR_STORAGE_KEY = "activeActorId";
+const ACTIVE_ACTOR_STORAGE_KEY = "noted_device_member_id";
 const PASSCODE_STORAGE_KEY = "noted_passcode";
 
 export default function App() {
@@ -147,19 +148,32 @@ export default function App() {
     localStorage.setItem(ACTIVE_ACTOR_STORAGE_KEY, memberId);
   };
 
-  // Validate or initialize activeActorId once members load
+  // Validate stored activeActorId once members load (only auto-select if sole member)
   useEffect(() => {
-    if (data?.members?.length) {
-      const storedId = localStorage.getItem(ACTIVE_ACTOR_STORAGE_KEY);
-      const validStored = storedId && data.members.some((m) => m.id === storedId);
-      const resolvedId = validStored ? storedId : data.members[0].id;
+    if (!data?.members?.length) return;
+    const storedId = localStorage.getItem(ACTIVE_ACTOR_STORAGE_KEY);
+    const isValidStored = Boolean(storedId && data.members.some((m) => m.id === storedId));
 
-      if (activeActorId !== resolvedId) {
-        setActiveActorId(resolvedId);
-        localStorage.setItem(ACTIVE_ACTOR_STORAGE_KEY, resolvedId);
+    if (isValidStored && storedId) {
+      if (activeActorId !== storedId) {
+        setActiveActorId(storedId);
       }
       if (!assigneeId || !data.members.some((m) => m.id === assigneeId)) {
-        setAssigneeId(resolvedId);
+        setAssigneeId(storedId);
+      }
+    } else if (data.members.length === 1) {
+      // Solo workspace: only 1 member exists, select automatically
+      const soloId = data.members[0].id;
+      setActiveActorId(soloId);
+      setAssigneeId(soloId);
+      localStorage.setItem(ACTIVE_ACTOR_STORAGE_KEY, soloId);
+    } else {
+      // Multi-member workspace on a new device: clear invalid/missing ID so DeviceIdentityScreen prompts the user
+      if (activeActorId !== null) {
+        setActiveActorId(null);
+      }
+      if (storedId) {
+        localStorage.removeItem(ACTIVE_ACTOR_STORAGE_KEY);
       }
     }
   }, [data?.members, activeActorId, assigneeId]);
@@ -434,8 +448,21 @@ export default function App() {
 
   const { space, members, tasks } = data;
   const memberById = new Map<string, Member>(members.map((m) => [m.id, m]));
-  const activeActor = activeActorId ? memberById.get(activeActorId) : members[0];
-  const targetAssignee = assigneeId ? memberById.get(assigneeId) : members[0];
+
+  // 3. If this device hasn't selected its member identity yet (and there are 2+ members), show "Who is using this device?" screen
+  const validActiveActor = activeActorId ? memberById.get(activeActorId) : undefined;
+  if (!validActiveActor && members.length > 1) {
+    return (
+      <DeviceIdentityScreen
+        spaceName={space.name}
+        members={members}
+        onSelectMember={(memberId) => selectActiveActor(memberId)}
+      />
+    );
+  }
+
+  const activeActor = validActiveActor ?? members[0];
+  const targetAssignee = (assigneeId ? memberById.get(assigneeId) : undefined) ?? activeActor;
 
   // Sort critical tasks by earliest cutoff date first
   const criticalTasks = tasks
@@ -532,7 +559,9 @@ export default function App() {
                 data-testid="lock-button"
                 onClick={() => {
                   localStorage.removeItem(PASSCODE_STORAGE_KEY);
+                  localStorage.removeItem(ACTIVE_ACTOR_STORAGE_KEY);
                   setStoredPasscode(null);
+                  setActiveActorId(null);
                   setIsLocked(true);
                 }}
                 className="h-8 w-8 text-muted-foreground hover:text-foreground"
