@@ -33,6 +33,11 @@ import { PasscodeLockScreen } from "@/components/PasscodeLockScreen";
 import { DeviceIdentityScreen } from "@/components/DeviceIdentityScreen";
 import { parseQuickCapture, isTaskForTomorrow } from "@/lib/nlp";
 import { triggerHaptic } from "@/lib/haptics";
+import {
+  getExistingPushSubscription,
+  subscribeDeviceToPush,
+  sendTestPushNotification,
+} from "@/lib/push";
 
 const ACTIVE_ACTOR_STORAGE_KEY = "noted_device_member_id";
 const PASSCODE_STORAGE_KEY = "noted_passcode";
@@ -62,6 +67,8 @@ export default function App() {
   });
   const [proxyPingBanner, setProxyPingBanner] = useState<string | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [pushEnabled, setPushEnabled] = useState<boolean>(false);
+  const [isPushBusy, setIsPushBusy] = useState<boolean>(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -146,6 +153,58 @@ export default function App() {
     setActiveActorId(memberId);
     setAssigneeId(memberId);
     localStorage.setItem(ACTIVE_ACTOR_STORAGE_KEY, memberId);
+    // If this device already has an active Web Push subscription, re-bind it to the selected member
+    getExistingPushSubscription().then((sub) => {
+      if (sub) {
+        subscribeDeviceToPush(memberId, getAuthHeaders()).then((res) => {
+          if (res.ok) setPushEnabled(true);
+        });
+      }
+    });
+  };
+
+  // Check if this browser already has an active Web Push subscription on load
+  useEffect(() => {
+    if (!activeActorId || isLocked) return;
+    getExistingPushSubscription().then((sub) => {
+      if (sub) {
+        setPushEnabled(true);
+        // Keep server subscription mapped to this device's active member
+        subscribeDeviceToPush(activeActorId, getAuthHeaders());
+      } else {
+        setPushEnabled(false);
+      }
+    });
+  }, [activeActorId, isLocked, getAuthHeaders]);
+
+  const handlePushButtonClick = async () => {
+    if (!activeActorId || isPushBusy) return;
+    setIsPushBusy(true);
+    triggerHaptic(12);
+    try {
+      if (!pushEnabled) {
+        const result = await subscribeDeviceToPush(activeActorId, getAuthHeaders());
+        if (result.ok) {
+          setPushEnabled(true);
+          await sendTestPushNotification(activeActorId, getAuthHeaders());
+          setProxyPingBanner("🔔 Phone push alerts enabled! Sent a test notification.");
+        } else {
+          setProxyPingBanner(`⚠️ ${result.error}`);
+        }
+      } else {
+        const sent = await sendTestPushNotification(activeActorId, getAuthHeaders());
+        setProxyPingBanner(
+          sent
+            ? "🔔 Sent a test push notification to your device!"
+            : "⚠️ Could not send test push. Try re-enabling alerts."
+        );
+      }
+      window.setTimeout(() => {
+        setProxyPingBanner(null);
+      }, 5000);
+    } finally {
+      setIsPushBusy(false);
+    }
   };
 
   // Validate stored activeActorId once members load (only auto-select if sole member)
@@ -549,6 +608,28 @@ export default function App() {
               className="text-xs h-8"
             >
               {soloMode ? "👤 My Focus Only" : "👥 Dual Action Board"}
+            </Button>
+
+            {/* Phone Web Push Notification Toggle / Test Button */}
+            <Button
+              variant={pushEnabled ? "secondary" : "outline"}
+              size="sm"
+              data-testid="push-alerts-button"
+              disabled={isPushBusy}
+              onClick={handlePushButtonClick}
+              className={`text-xs h-8 gap-1.5 ${
+                pushEnabled
+                  ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
+                  : ""
+              }`}
+              title={
+                pushEnabled
+                  ? "Push alerts are active for this device. Tap to send a test notification."
+                  : "Enable background phone push notifications for partner notes & critical deadlines"
+              }
+            >
+              <BellRing className="w-3.5 h-3.5" />
+              <span>{pushEnabled ? "Alerts On" : "Enable Alerts"}</span>
             </Button>
 
             {/* Lock button if passcode protection is enabled */}

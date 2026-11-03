@@ -70,6 +70,17 @@ export interface AuthStatusResponse {
   spaceName: string | null;
 }
 
+export interface PushSubscribePayload {
+  memberId: string;
+  subscription: {
+    endpoint: string;
+    keys: {
+      p256dh: string;
+      auth: string;
+    };
+  };
+}
+
 export type WsMessage =
   | { type: "ping"; timestamp: number }
   | { type: "pong"; timestamp: number }

@@ -10,9 +10,14 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { db } from "./db/index.js";
-import { spaces, members, tasks } from "./db/schema.js";
+import { spaces, members, tasks, pushSubscriptions } from "./db/schema.js";
 import { runMigrations } from "./db/migrate.js";
 import { ensureDefaultSeed } from "./db/seed.js";
+import {
+  ensureSpaceVapidKeys,
+  sendPushNotification,
+  evaluateCriticalDeadlineAlerts,
+} from "./push.js";
 import type {
   Task,
   Member,
@@ -21,6 +26,7 @@ import type {
   UpdateTaskPayload,
   SetupPayload,
   AuthStatusResponse,
+  PushSubscribePayload,
   WsMessage,
 } from "@todo-app/shared";
 
@@ -78,6 +84,7 @@ app.use("/api/tasks/*", passcodeMiddleware);
 app.use("/api/members", passcodeMiddleware);
 app.use("/api/members/*", passcodeMiddleware);
 app.use("/api/spaces", passcodeMiddleware);
+app.use("/api/push/*", passcodeMiddleware);
 app.use("/ws", passcodeMiddleware);
 
 // Active WebSocket clients and heartbeat tracking
@@ -123,6 +130,14 @@ const heartbeatTimer = setInterval(() => {
   }
 }, HEARTBEAT_INTERVAL_MS);
 heartbeatTimer.unref();
+
+// Periodic 15-minute check for Critical Hard Deadlines (D-3, D-1, and 9:00 AM Due Date)
+const criticalDeadlineTimer = setInterval(() => {
+  evaluateCriticalDeadlineAlerts().catch((err) =>
+    console.error("Critical deadline check error:", err)
+  );
+}, 15 * 60 * 1000);
+criticalDeadlineTimer.unref();
 
 // Format DB rows to shared DTOs (never leak raw passcode)
 function serializeSpace(
@@ -411,7 +426,108 @@ app.post("/api/tasks", async (c) => {
 
   const serialized = serializeTask(created);
   broadcast({ type: "task:created", payload: serialized });
+
+  // PRD Section 4 Strict Notification Protocol:
+  // Instant subtle push notification when a member proxy-captures a task for another member
+  if (created.createdBy !== created.assignedTo) {
+    const [creator] = await db
+      .select()
+      .from(members)
+      .where(eq(members.id, created.createdBy))
+      .limit(1);
+    const creatorName = creator?.name || "Partner";
+    sendPushNotification(
+      created.spaceId,
+      {
+        title: `📝 [${creatorName}] noted for you`,
+        body: `${created.title}${created.note ? ` — ${created.note}` : ""}`,
+        tag: `proxy-task-${created.id}`,
+        url: "/",
+      },
+      created.assignedTo
+    ).catch((err) => console.error("Failed to send proxy task push notification:", err));
+  }
+
   return c.json(serialized, 201);
+});
+
+// Web Push Notification Endpoints (VAPID public key, subscribe, unsubscribe, test)
+app.get("/api/push/vapid-public-key", async (c) => {
+  const [space] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
+  if (!space) {
+    return c.json({ error: "No space initialized" }, 404);
+  }
+  const keys = await ensureSpaceVapidKeys(space.id);
+  return c.json({ publicKey: keys.publicKey });
+});
+
+app.post("/api/push/subscribe", async (c) => {
+  const body = await c.req.json<PushSubscribePayload>();
+  const endpoint = body.subscription?.endpoint?.trim();
+  const p256dh = body.subscription?.keys?.p256dh?.trim();
+  const auth = body.subscription?.keys?.auth?.trim();
+
+  if (!body.memberId || !endpoint || !p256dh || !auth) {
+    return c.json({ error: "memberId and valid push subscription keys are required" }, 400);
+  }
+
+  const [space] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
+  if (!space) {
+    return c.json({ error: "No space initialized" }, 404);
+  }
+
+  // Upsert by endpoint so re-subscribing or switching member on the same phone updates cleanly
+  await db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, endpoint));
+
+  const [created] = await db
+    .insert(pushSubscriptions)
+    .values({
+      spaceId: space.id,
+      memberId: body.memberId,
+      endpoint,
+      p256dh,
+      auth,
+    })
+    .returning();
+
+  return c.json({ ok: true, id: created.id }, 201);
+});
+
+app.post("/api/push/unsubscribe", async (c) => {
+  const body = await c.req.json<{ endpoint: string }>();
+  if (body.endpoint) {
+    await db
+      .delete(pushSubscriptions)
+      .where(eq(pushSubscriptions.endpoint, body.endpoint));
+  }
+  return c.json({ ok: true });
+});
+
+app.post("/api/push/test", async (c) => {
+  const body = await c.req.json<{ memberId: string }>();
+  const [space] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
+  if (!space) {
+    return c.json({ error: "No space initialized" }, 404);
+  }
+
+  const [member] = await db
+    .select()
+    .from(members)
+    .where(eq(members.id, body.memberId))
+    .limit(1);
+
+  const result = await sendPushNotification(
+    space.id,
+    {
+      title: `🔔 Noted Alerts Active (${member?.name || "Device"})`,
+      body: "You'll only be buzzed for Critical Hard Deadlines and Proxy Notes from your household.",
+      tag: "noted-test-ping",
+      url: "/",
+    },
+    body.memberId
+  );
+
+  return c.json({ ok: true, ...result });
 });
 
 app.patch("/api/tasks/:id", async (c) => {

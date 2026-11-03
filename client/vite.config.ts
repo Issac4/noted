@@ -8,7 +8,13 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["icon.svg", "apple-touch-icon.png", "pwa-192x192.png", "pwa-512x512.png"],
+      includeAssets: [
+        "icon.svg",
+        "apple-touch-icon.png",
+        "pwa-192x192.png",
+        "pwa-512x512.png",
+        "sw-push.js",
+      ],
       manifest: {
         name: "Noted",
         short_name: "Noted",
@@ -41,6 +47,7 @@ export default defineConfig({
         ],
       },
       workbox: {
+        importScripts: ["/sw-push.js"],
         globPatterns: ["**/*.{js,css,html,svg,png,ico,woff2}"],
         cleanupOutdatedCaches: true,
         clientsClaim: true,

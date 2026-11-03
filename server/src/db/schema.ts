@@ -9,6 +9,8 @@ export const spaces = pgTable("spaces", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: text("name").notNull(),
   passcode: text("passcode"),
+  vapidPublicKey: text("vapid_public_key"),
+  vapidPrivateKey: text("vapid_private_key"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -44,9 +46,24 @@ export const tasks = pgTable("tasks", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  spaceId: uuid("space_id")
+    .notNull()
+    .references(() => spaces.id, { onDelete: "cascade" }),
+  memberId: uuid("member_id")
+    .notNull()
+    .references(() => members.id, { onDelete: "cascade" }),
+  endpoint: text("endpoint").notNull(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const spacesRelations = relations(spaces, ({ many }) => ({
   members: many(members),
   tasks: many(tasks),
+  pushSubscriptions: many(pushSubscriptions),
 }));
 
 export const membersRelations = relations(members, ({ one, many }) => ({
@@ -56,6 +73,7 @@ export const membersRelations = relations(members, ({ one, many }) => ({
   }),
   assignedTasks: many(tasks, { relationName: "assignedTasks" }),
   createdTasks: many(tasks, { relationName: "createdTasks" }),
+  pushSubscriptions: many(pushSubscriptions),
 }));
 
 export const tasksRelations = relations(tasks, ({ one }) => ({
@@ -72,5 +90,16 @@ export const tasksRelations = relations(tasks, ({ one }) => ({
     fields: [tasks.createdBy],
     references: [members.id],
     relationName: "createdTasks",
+  }),
+}));
+
+export const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
+  space: one(spaces, {
+    fields: [pushSubscriptions.spaceId],
+    references: [spaces.id],
+  }),
+  member: one(members, {
+    fields: [pushSubscriptions.memberId],
+    references: [members.id],
   }),
 }));
