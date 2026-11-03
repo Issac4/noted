@@ -8,7 +8,12 @@ export interface AppStateData {
   tasks: Task[];
 }
 
-export function useFamilySocket() {
+export interface UseFamilySocketOptions {
+  onTaskCreated?: (task: Task) => void;
+  onTaskUpdated?: (task: Task) => void;
+}
+
+export function useFamilySocket(options?: UseFamilySocketOptions) {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
   const [lastHeartbeat, setLastHeartbeat] = useState<number | null>(null);
@@ -16,6 +21,8 @@ export function useFamilySocket() {
   const retryCountRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
   const heartbeatTimerRef = useRef<number | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   useEffect(() => {
     let unmounted = false;
@@ -88,6 +95,7 @@ export function useFamilySocket() {
                 tasks: [msg.payload, ...prev.tasks],
               };
             });
+            optionsRef.current?.onTaskCreated?.(msg.payload);
           } else if (msg.type === "task:updated") {
             queryClient.setQueryData<AppStateData>(["state"], (prev) => {
               if (!prev) return prev;
@@ -96,6 +104,7 @@ export function useFamilySocket() {
                 tasks: prev.tasks.map((t) => (t.id === msg.payload.id ? msg.payload : t)),
               };
             });
+            optionsRef.current?.onTaskUpdated?.(msg.payload);
           } else if (msg.type === "task:deleted") {
             queryClient.setQueryData<AppStateData>(["state"], (prev) => {
               if (!prev) return prev;

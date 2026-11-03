@@ -1,17 +1,17 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
-  CheckCircle2,
-  Circle,
   Send,
   Sparkles,
-  Trash2,
   UserCheck,
   Wifi,
   WifiOff,
-  FileText,
   Sun,
+  Moon,
+  BellRing,
+  CalendarClock,
+  Sunrise,
 } from "lucide-react";
 import type { Task, Member, CreateTaskPayload, UpdateTaskPayload } from "@todo-app/shared";
 import { useFamilySocket, type AppStateData } from "@/hooks/useFamilySocket";
@@ -19,73 +19,24 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-
-function parseQuickCapture(rawInput: string): {
-  title: string;
-  note: string | null;
-  type: "critical" | "daily";
-  dueDate: string | null;
-} {
-  let text = rawInput.trim();
-  let note: string | null = null;
-
-  // Support optional note via "//" separator, e.g. "Replace filter // 16x25x1"
-  if (text.includes("//")) {
-    const [mainPart, ...noteParts] = text.split("//");
-    text = mainPart.trim();
-    note = noteParts.join("//").trim() || null;
-  }
-
-  let type: "critical" | "daily" = "daily";
-  if (/!critical\b/i.test(text) || /!urgent\b/i.test(text)) {
-    type = "critical";
-    text = text.replace(/!(critical|urgent)\b/gi, "").trim();
-  }
-
-  let dueDate: string | null = null;
-  const now = new Date();
-
-  // Detect "in X days"
-  const inDaysMatch = text.match(/\bin\s+(\d+)\s+days?\b/i);
-  if (inDaysMatch) {
-    const days = parseInt(inDaysMatch[1], 10);
-    const target = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-    dueDate = target.toISOString();
-  } else if (/\btomorrow\b/i.test(text) || /聽日/.test(text)) {
-    const target = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-    dueDate = target.toISOString();
-  } else if (type === "critical") {
-    const target = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-    dueDate = target.toISOString();
-  }
-
-  return {
-    title: text || rawInput.trim(),
-    note,
-    type,
-    dueDate,
-  };
-}
-
-function getDaysLeftLabel(dueDateStr: string | null): string {
-  if (!dueDateStr) return "Due Soon";
-  const diffMs = new Date(dueDateStr).getTime() - Date.now();
-  const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-  if (days < 0) return `${Math.abs(days)}d Past Cutoff`;
-  if (days === 0) return "Due Today";
-  if (days === 1) return "1 Day Left";
-  return `${days} Days Left`;
-}
+import { TaskItemCard } from "@/components/TaskItemCard";
+import { parseQuickCapture, isTaskForTomorrow } from "@/lib/nlp";
+import { triggerHaptic } from "@/lib/haptics";
 
 export default function App() {
   const queryClient = useQueryClient();
-  const { status: wsStatus } = useFamilySocket();
 
   const [activeActorId, setActiveActorId] = useState<string | null>(null);
   const [assigneeId, setAssigneeId] = useState<string | null>(null);
   const [quickInput, setQuickInput] = useState("");
   const [forceCritical, setForceCritical] = useState(false);
   const [soloMode, setSoloMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem("todo-theme");
+    return saved ? saved === "dark" : true;
+  });
+  const [proxyPingBanner, setProxyPingBanner] = useState<string | null>(null);
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading, isError } = useQuery<AppStateData>({
@@ -94,6 +45,39 @@ export default function App() {
       const res = await fetch("/api/state");
       if (!res.ok) throw new Error("Failed to fetch workspace state");
       return res.json();
+    },
+  });
+
+  // Sync dark mode class on <html>
+  useEffect(() => {
+    const root = document.documentElement;
+    if (isDarkMode) {
+      root.classList.add("dark");
+      localStorage.setItem("todo-theme", "dark");
+    } else {
+      root.classList.remove("dark");
+      localStorage.setItem("todo-theme", "light");
+    }
+  }, [isDarkMode]);
+
+  // WebSocket real-time sync + subtle proxy task notification banner (PRD Section 4)
+  const { status: wsStatus } = useFamilySocket({
+    onTaskCreated: (created) => {
+      if (
+        activeActorId &&
+        created.assignedTo === activeActorId &&
+        created.createdBy !== activeActorId
+      ) {
+        const creatorName =
+          data?.members.find((m) => m.id === created.createdBy)?.name || "Partner";
+        setProxyPingBanner(`📝 ${creatorName} noted for you: ${created.title}`);
+        triggerHaptic(15);
+        window.setTimeout(() => {
+          setProxyPingBanner((current) =>
+            current?.includes(created.title) ? null : current
+          );
+        }, 5000);
+      }
     },
   });
 
@@ -178,6 +162,12 @@ export default function App() {
     },
   });
 
+  // Live NLP preview for the bottom quick input bar
+  const liveNlpPreview = useMemo(() => {
+    if (!quickInput.trim()) return null;
+    return parseQuickCapture(quickInput);
+  }, [quickInput]);
+
   const handleCaptureSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickInput.trim() || !activeActorId || !assigneeId || !data?.space) return;
@@ -188,6 +178,8 @@ export default function App() {
       finalType === "critical" && !parsed.dueDate
         ? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
         : parsed.dueDate;
+
+    triggerHaptic(12);
 
     createTaskMutation.mutate({
       spaceId: data.space.id,
@@ -227,20 +219,35 @@ export default function App() {
   const activeActor = activeActorId ? memberById.get(activeActorId) : members[0];
   const targetAssignee = assigneeId ? memberById.get(assigneeId) : members[0];
 
-  const criticalTasks = tasks.filter((t) => t.type === "critical" && t.status === "pending");
-  const visibleMembers = soloMode && activeActor ? [activeActor] : members;
+  // Sort critical tasks by earliest cutoff date first
+  const criticalTasks = tasks
+    .filter((t) => t.type === "critical" && t.status === "pending")
+    .sort((a, b) => {
+      const aTime = a.dueDate ? new Date(a.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
+      const bTime = b.dueDate ? new Date(b.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
+      return aTime - bTime;
+    });
+
+  // Order columns so the active member ("My Focus") appears first, followed by Partner(s)
+  const orderedMembers = [...members].sort((a, b) => {
+    if (a.id === activeActor?.id) return -1;
+    if (b.id === activeActor?.id) return 1;
+    return 0;
+  });
+  const visibleMembers = soloMode && activeActor ? [activeActor] : orderedMembers;
 
   const cycleAssignee = () => {
     if (!members.length) return;
+    triggerHaptic(10);
     const idx = members.findIndex((m) => m.id === assigneeId);
     const next = members[(idx + 1) % members.length];
     setAssigneeId(next.id);
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground pb-28">
+    <div className="min-h-screen bg-background text-foreground pb-32">
       {/* Header Bar */}
-      <header className="sticky top-0 z-20 border-b border-border/60 bg-background/80 backdrop-blur-md">
+      <header className="sticky top-0 z-20 border-b border-border/60 bg-background/85 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center text-primary font-bold">
@@ -250,7 +257,7 @@ export default function App() {
               <h1 className="text-base font-semibold tracking-tight flex items-center gap-2">
                 {space.name}
                 <Badge variant="secondary" className="text-[11px] font-normal">
-                  Guilt-Free Rollover
+                  🌱 Guilt-Free Rollover
                 </Badge>
               </h1>
               <p className="text-xs text-muted-foreground">
@@ -259,15 +266,20 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
             {/* Active user selector ("Viewing as") */}
-            <div className="flex items-center gap-1.5 bg-secondary/60 p-1 rounded-lg border border-border/60">
-              <span className="text-[11px] text-muted-foreground px-2">Acting as:</span>
+            <div
+              data-testid="actor-switcher"
+              className="flex items-center gap-1 bg-secondary/60 p-1 rounded-lg border border-border/60"
+            >
+              <span className="text-[11px] text-muted-foreground px-2">Identity:</span>
               {members.map((m) => (
                 <button
                   key={m.id}
                   type="button"
+                  data-testid={`switch-actor-${m.name.toLowerCase()}`}
                   onClick={() => {
+                    triggerHaptic(10);
                     setActiveActorId(m.id);
                     setAssigneeId(m.id);
                   }}
@@ -282,14 +294,31 @@ export default function App() {
               ))}
             </div>
 
-            {/* Solo / Collaborative view toggle */}
+            {/* Solo / Dual Action Board toggle */}
             <Button
               variant="outline"
               size="sm"
+              data-testid="view-mode-toggle"
               onClick={() => setSoloMode((v) => !v)}
-              className="text-xs"
+              className="text-xs h-8"
             >
-              {soloMode ? "👤 Solo Focus" : "👥 Collaborative"}
+              {soloMode ? "👤 My Focus Only" : "👥 Dual Action Board"}
+            </Button>
+
+            {/* Dark / Light Mode toggle */}
+            <Button
+              variant="ghost"
+              size="icon"
+              data-testid="theme-toggle"
+              onClick={() => setIsDarkMode((v) => !v)}
+              className="h-8 w-8"
+              title={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {isDarkMode ? (
+                <Sun className="w-4 h-4 text-amber-400" />
+              ) : (
+                <Moon className="w-4 h-4 text-slate-700" />
+              )}
             </Button>
 
             {/* WebSocket real-time indicator */}
@@ -315,251 +344,218 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        {/* Real-time Proxy Task Capture Toast Banner (PRD Section 4) */}
+        {proxyPingBanner && (
+          <div
+            data-testid="proxy-ping-banner"
+            className="bg-primary/15 border-t border-primary/30 px-4 py-2 text-xs text-primary flex items-center justify-center gap-2"
+          >
+            <BellRing className="w-3.5 h-3.5 animate-bounce" />
+            <span className="font-medium">{proxyPingBanner}</span>
+          </div>
+        )}
       </header>
 
       <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
         {/* Module 1: Critical Hard Deadlines (The Gatekeeper) */}
-        <section aria-label="Critical Hard Deadlines">
-          <Card className="border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-card to-card">
-            <CardHeader className="pb-3 flex flex-row items-center justify-between space-y-0">
+        <section aria-label="Critical Hard Deadlines" data-testid="critical-gatekeeper">
+          <Card className="border-amber-500/35 bg-gradient-to-r from-amber-500/10 via-card to-card shadow-sm">
+            <CardHeader className="pb-3 flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-400" />
-                <CardTitle className="text-sm font-semibold text-amber-200">
-                  Critical Hard Deadlines (The Gatekeeper)
+                <CardTitle className="text-sm font-semibold text-amber-300">
+                  🚨 Critical Hard Deadlines (The Gatekeeper)
                 </CardTitle>
+                <Badge variant="outline" className="text-[11px] border-amber-500/40 text-amber-300">
+                  {criticalTasks.length} Pinned
+                </Badge>
               </div>
               <span className="text-xs text-muted-foreground">
-                Alerts strictly at D-3, D-1 & 9:00 AM due date
+                Strict alerts only at D-3, D-1 & 9:00 AM on due date
               </span>
             </CardHeader>
             <CardContent>
               {criticalTasks.length === 0 ? (
                 <p className="text-xs text-muted-foreground py-1">
-                  No critical hard deadlines pending. Add <code className="text-amber-300">!critical</code> to any task to pin it here.
+                  No critical hard deadlines pending. Type{" "}
+                  <code className="text-amber-300 px-1 py-0.5 rounded bg-amber-500/10">
+                    !critical
+                  </code>{" "}
+                  in quick capture to pin non-negotiable obligations here.
                 </p>
               ) : (
                 <div className="grid gap-2.5 sm:grid-cols-2">
-                  {criticalTasks.map((task) => {
-                    const assignee = memberById.get(task.assignedTo);
-                    const creator = memberById.get(task.createdBy);
-                    const isProxy = task.createdBy !== task.assignedTo;
-                    return (
-                      <div
-                        key={task.id}
-                        data-testid="critical-task-item"
-                        className="flex items-start justify-between gap-3 p-3 rounded-lg border border-amber-500/30 bg-background/60"
-                      >
-                        <div className="flex items-start gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateTaskMutation.mutate({
-                                id: task.id,
-                                patch: { status: "completed" },
-                              })
-                            }
-                            className="mt-0.5 text-amber-400 hover:text-emerald-400 transition-colors"
-                            title="Complete critical deadline"
-                          >
-                            <Circle className="w-4 h-4" />
-                          </button>
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Badge variant="destructive" className="text-[11px]">
-                                ⚠️ {getDaysLeftLabel(task.dueDate)}
-                              </Badge>
-                              <span className="text-sm font-medium text-foreground">
-                                {task.title}
-                              </span>
-                            </div>
-                            {task.note && (
-                              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                                <FileText className="w-3 h-3" /> {task.note}
-                              </p>
-                            )}
-                            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                              {assignee && (
-                                <span>
-                                  Owner: {assignee.avatar} {assignee.name}
-                                </span>
-                              )}
-                              {isProxy && creator && (
-                                <span className="text-primary">
-                                  (Noted by {creator.name} 📝)
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => deleteTaskMutation.mutate(task.id)}
-                          className="text-muted-foreground hover:text-destructive transition-colors"
-                          title="Delete task"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    );
-                  })}
+                  {criticalTasks.map((task) => (
+                    <TaskItemCard
+                      key={task.id}
+                      task={task}
+                      assignee={memberById.get(task.assignedTo)}
+                      creator={memberById.get(task.createdBy)}
+                      showOwner={true}
+                      isCriticalCard={true}
+                      onUpdate={(id, patch) => updateTaskMutation.mutate({ id, patch })}
+                      onDelete={(id) => deleteTaskMutation.mutate(id)}
+                    />
+                  ))}
                 </div>
               )}
             </CardContent>
           </Card>
         </section>
 
-        {/* Module 2: Today & Tomorrow Action Board (Bento Grid) */}
+        {/* Module 2: Dual Action Board (My Focus vs. Partner Focus) */}
         <section aria-label="Today and Tomorrow Action Board" className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Sun className="w-4 h-4 text-primary" />
               <h2 className="text-sm font-semibold tracking-tight">
-                Today & Tomorrow Action Board
+                ☀️ Today & Tomorrow Action Board
               </h2>
             </div>
             <span className="text-xs text-muted-foreground">
-              Press <kbd className="px-1.5 py-0.5 text-[10px] rounded bg-secondary border">C</kbd> to quick capture
+              Press{" "}
+              <kbd className="px-1.5 py-0.5 text-[10px] rounded bg-secondary border">C</kbd> to
+              quick capture • Click any task to attach a{" "}
+              <span className="text-foreground font-medium">Context Note</span>
             </span>
           </div>
 
           <div
+            data-testid="action-board-grid"
             className={`grid gap-4 ${
               visibleMembers.length > 1 ? "md:grid-cols-2" : "grid-cols-1"
             }`}
           >
             {visibleMembers.map((member) => {
-              const memberTasks = tasks.filter((t) => t.assignedTo === member.id);
+              const isSelf = member.id === activeActor?.id;
+              const memberTasks = tasks.filter(
+                (t) => t.assignedTo === member.id && t.type !== "critical"
+              );
               const pendingTasks = memberTasks.filter((t) => t.status === "pending");
+              const todayTasks = pendingTasks.filter((t) => !isTaskForTomorrow(t.dueDate));
+              const tomorrowTasks = pendingTasks.filter((t) => isTaskForTomorrow(t.dueDate));
               const completedTasks = memberTasks.filter((t) => t.status === "completed");
 
               return (
-                <Card key={member.id} className="flex flex-col">
+                <Card
+                  key={member.id}
+                  data-testid={`member-column-${member.name.toLowerCase()}`}
+                  className={`flex flex-col ${
+                    isSelf ? "border-primary/30 shadow-sm" : "border-border/70"
+                  }`}
+                >
                   <CardHeader className="pb-3 border-b border-border/50 flex flex-row items-center justify-between space-y-0">
                     <div className="flex items-center gap-2.5">
                       <span className="text-xl">{member.avatar}</span>
                       <div>
-                        <CardTitle className="text-base">{member.name}&apos;s Focus</CardTitle>
+                        <CardTitle className="text-base flex items-center gap-2">
+                          {isSelf ? `My Focus (${member.name})` : `${member.name}'s Focus`}
+                          {isSelf && (
+                            <Badge variant="secondary" className="text-[10px] font-normal">
+                              You
+                            </Badge>
+                          )}
+                        </CardTitle>
                         <p className="text-xs text-muted-foreground">
-                          {pendingTasks.length} active • {completedTasks.length} completed
+                          {todayTasks.length} today • {tomorrowTasks.length} tomorrow •{" "}
+                          {completedTasks.length} done
                         </p>
                       </div>
                     </div>
+
                     <Button
-                      variant="ghost"
+                      variant={assigneeId === member.id ? "default" : "outline"}
                       size="sm"
+                      data-testid={`proxy-select-${member.name.toLowerCase()}`}
                       onClick={() => {
+                        triggerHaptic(10);
                         setAssigneeId(member.id);
                         inputRef.current?.focus();
                       }}
-                      className="text-xs text-muted-foreground hover:text-foreground"
+                      className="text-xs h-8"
                     >
-                      + Note for {member.name}
+                      {isSelf ? "+ Add to My Focus" : `📝 Proxy Note for ${member.name}`}
                     </Button>
                   </CardHeader>
 
-                  <CardContent className="pt-4 space-y-2.5 flex-1">
+                  <CardContent className="pt-4 space-y-4 flex-1">
                     {pendingTasks.length === 0 ? (
                       <div className="py-8 text-center text-xs text-muted-foreground">
-                        All clear! Enjoy a peaceful, guilt-free evening 🌱
+                        All clear! Incomplete tasks quietly roll over with zero shame 🌱
                       </div>
                     ) : (
-                      pendingTasks.map((task) => {
-                        const creator = memberById.get(task.createdBy);
-                        const isProxy = task.createdBy !== task.assignedTo;
-
-                        return (
-                          <div
-                            key={task.id}
-                            data-testid="task-item"
-                            className="group flex items-start justify-between gap-3 p-3 rounded-lg border border-border/60 bg-secondary/20 hover:bg-secondary/40 transition-colors"
-                          >
-                            <div className="flex items-start gap-2.5">
-                              <button
-                                type="button"
-                                data-testid={`toggle-task-${task.id}`}
-                                onClick={() =>
-                                  updateTaskMutation.mutate({
-                                    id: task.id,
-                                    patch: { status: "completed" },
-                                  })
-                                }
-                                className="mt-0.5 text-muted-foreground hover:text-primary transition-colors"
-                                title="Mark completed"
-                              >
-                                <Circle className="w-4 h-4" />
-                              </button>
-                              <div className="space-y-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="text-sm font-medium text-foreground">
-                                    {task.title}
-                                  </span>
-                                  {task.type === "critical" && (
-                                    <Badge variant="destructive" className="text-[10px] py-0">
-                                      Critical
-                                    </Badge>
-                                  )}
-                                  {isProxy && creator && (
-                                    <span
-                                      data-testid="proxy-attribution"
-                                      className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20"
-                                    >
-                                      Noted by {creator.name} 📝
-                                    </span>
-                                  )}
-                                </div>
-                                {task.note && (
-                                  <p className="text-xs text-muted-foreground">
-                                    {task.note}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={() => deleteTaskMutation.mutate(task.id)}
-                              className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-                              title="Remove task"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                      <>
+                        {/* Today Focus Stream */}
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                            <CalendarClock className="w-3.5 h-3.5 text-primary" />
+                            <span>Today ({todayTasks.length})</span>
                           </div>
-                        );
-                      })
+                          {todayTasks.length === 0 ? (
+                            <p className="text-xs text-muted-foreground/70 pl-1">
+                              Nothing urgent remaining for today.
+                            </p>
+                          ) : (
+                            todayTasks.map((task) => (
+                              <TaskItemCard
+                                key={task.id}
+                                task={task}
+                                creator={memberById.get(task.createdBy)}
+                                assignee={member}
+                                onUpdate={(id, patch) =>
+                                  updateTaskMutation.mutate({ id, patch })
+                                }
+                                onDelete={(id) => deleteTaskMutation.mutate(id)}
+                              />
+                            ))
+                          )}
+                        </div>
+
+                        {/* Tomorrow Focus Stream */}
+                        {tomorrowTasks.length > 0 && (
+                          <div className="space-y-2 pt-2 border-t border-border/40">
+                            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-sky-400">
+                              <Sunrise className="w-3.5 h-3.5" />
+                              <span>Tomorrow & Upcoming ({tomorrowTasks.length})</span>
+                            </div>
+                            {tomorrowTasks.map((task) => (
+                              <TaskItemCard
+                                key={task.id}
+                                task={task}
+                                creator={memberById.get(task.createdBy)}
+                                assignee={member}
+                                onUpdate={(id, patch) =>
+                                  updateTaskMutation.mutate({ id, patch })
+                                }
+                                onDelete={(id) => deleteTaskMutation.mutate(id)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </>
                     )}
 
+                    {/* Completed Stream */}
                     {completedTasks.length > 0 && (
-                      <div className="pt-3 border-t border-border/40 space-y-1.5">
+                      <div className="pt-3 border-t border-border/40 space-y-2">
                         <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-                          Completed
+                          Completed Silently ({completedTasks.length})
                         </p>
-                        {completedTasks.slice(0, 4).map((task) => (
-                          <div
-                            key={task.id}
-                            className="flex items-center justify-between gap-2 py-1 px-2 rounded text-xs text-muted-foreground/70"
-                          >
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateTaskMutation.mutate({
-                                  id: task.id,
-                                  patch: { status: "pending" },
-                                })
+                        <div className="space-y-1.5">
+                          {completedTasks.slice(0, 5).map((task) => (
+                            <TaskItemCard
+                              key={task.id}
+                              task={task}
+                              creator={memberById.get(task.createdBy)}
+                              assignee={member}
+                              onUpdate={(id, patch) =>
+                                updateTaskMutation.mutate({ id, patch })
                               }
-                              className="flex items-center gap-2 line-through hover:text-foreground transition-colors text-left"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5 text-primary shrink-0" />
-                              <span>{task.title}</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteTaskMutation.mutate(task.id)}
-                              className="hover:text-destructive"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        ))}
+                              onDelete={(id) => deleteTaskMutation.mutate(id)}
+                            />
+                          ))}
+                        </div>
                       </div>
                     )}
                   </CardContent>
@@ -570,64 +566,97 @@ export default function App() {
         </section>
       </main>
 
-      {/* Module 3: Zero-Overhead Quick Capture Bar */}
-      <div className="fixed bottom-0 inset-x-0 z-30 border-t border-border/80 bg-card/95 backdrop-blur-lg">
-        <form
-          onSubmit={handleCaptureSubmit}
-          className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-2"
-        >
-          {/* One-Tap Assignee Toggle */}
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={cycleAssignee}
-            data-testid="assignee-toggle"
-            className="shrink-0 gap-1.5 text-xs"
-            title="Tap to toggle who this task is for (Self vs Partner proxy capture)"
-          >
-            <UserCheck className="w-3.5 h-3.5 text-primary" />
-            <span>
-              For: {targetAssignee?.avatar} {targetAssignee?.name}
-            </span>
-          </Button>
+      {/* Module 3: Bottom Single-Line Chat-Like Quick Capture Bar */}
+      <div className="fixed bottom-0 inset-x-0 z-30 border-t border-border/80 bg-card/95 backdrop-blur-lg shadow-lg">
+        <div className="max-w-4xl mx-auto px-4 py-2.5 space-y-1.5">
+          {/* Live NLP & Proxy Detection Pills */}
+          {(liveNlpPreview?.detectedKeywords.length || activeActorId !== assigneeId || forceCritical) ? (
+            <div
+              data-testid="nlp-detection-bar"
+              className="flex flex-wrap items-center gap-1.5 text-[11px]"
+            >
+              <span className="text-muted-foreground">Smart Capture:</span>
+              {activeActorId !== assigneeId && targetAssignee && activeActor && (
+                <span className="px-2 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/30 font-medium">
+                  📝 Proxy for {targetAssignee.name} (Noted by {activeActor.name})
+                </span>
+              )}
+              {forceCritical && !liveNlpPreview?.detectedKeywords.includes("🚨 Critical Deadline") && (
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
+                  🚨 Critical Deadline
+                </span>
+              )}
+              {liveNlpPreview?.detectedKeywords.map((kw) => (
+                <span
+                  key={kw}
+                  className="px-2 py-0.5 rounded-full bg-secondary text-foreground border border-border"
+                >
+                  {kw}
+                </span>
+              ))}
+            </div>
+          ) : null}
 
-          {/* Critical toggle pill */}
-          <Button
-            type="button"
-            variant={forceCritical ? "destructive" : "outline"}
-            size="sm"
-            onClick={() => setForceCritical((v) => !v)}
-            className="shrink-0 text-xs"
-            title="Toggle Critical Hard Deadline"
-          >
-            ⚠️ Critical
-          </Button>
+          <form onSubmit={handleCaptureSubmit} className="flex items-center gap-2">
+            {/* One-Tap Self vs Partner Assignee Toggle */}
+            <Button
+              type="button"
+              variant={activeActorId !== assigneeId ? "default" : "secondary"}
+              size="sm"
+              onClick={cycleAssignee}
+              data-testid="assignee-toggle"
+              className="shrink-0 gap-1.5 text-xs h-10"
+              title="One-tap toggle: assign to yourself or proxy-note for partner"
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>
+                {activeActorId === assigneeId
+                  ? `Self (${targetAssignee?.avatar} ${targetAssignee?.name})`
+                  : `Proxy → ${targetAssignee?.avatar} ${targetAssignee?.name}`}
+              </span>
+            </Button>
 
-          <Input
-            ref={inputRef}
-            value={quickInput}
-            onChange={(e) => setQuickInput(e.target.value)}
-            data-testid="quick-capture-input"
-            placeholder={
-              activeActorId !== assigneeId
-                ? `Proxy note for ${targetAssignee?.name}... (use // for context note, !critical for hard deadline)`
-                : "Type a task and hit Enter... (e.g. 'Pick up parcel tomorrow // locker #12' or '!critical File taxes')"
-            }
-            className="flex-1 bg-background/90"
-          />
+            {/* Critical toggle pill */}
+            <Button
+              type="button"
+              variant={forceCritical ? "destructive" : "outline"}
+              size="sm"
+              data-testid="critical-toggle"
+              onClick={() => {
+                triggerHaptic(10);
+                setForceCritical((v) => !v);
+              }}
+              className="shrink-0 text-xs h-10"
+              title="Toggle Critical Hard Deadline"
+            >
+              ⚠️ Critical
+            </Button>
 
-          <Button
-            type="submit"
-            size="sm"
-            data-testid="quick-capture-submit"
-            disabled={!quickInput.trim() || createTaskMutation.isPending}
-            className="shrink-0"
-          >
-            <Send className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Capture</span>
-          </Button>
-        </form>
+            <Input
+              ref={inputRef}
+              value={quickInput}
+              onChange={(e) => setQuickInput(e.target.value)}
+              data-testid="quick-capture-input"
+              placeholder={
+                activeActorId !== assigneeId
+                  ? `Noting for ${targetAssignee?.name}... (e.g. 'Pick up prescription tomorrow // 500mg')`
+                  : "Type a task & hit Enter... ('Order takeout tonight', 'Pick up parcel tomorrow', '!critical File taxes')"
+              }
+              className="flex-1 h-10 bg-background/90"
+            />
+
+            <Button
+              type="submit"
+              size="sm"
+              data-testid="quick-capture-submit"
+              disabled={!quickInput.trim() || createTaskMutation.isPending}
+              className="shrink-0 h-10 px-4"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Send</span>
+            </Button>
+          </form>
+        </div>
       </div>
     </div>
   );
