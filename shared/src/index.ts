@@ -51,6 +51,17 @@ export interface UpdateTaskPayload {
   status?: TaskStatus;
 }
 
+export interface SetupMemberInput {
+  name: string;
+  avatar: string;
+  role?: MemberRole;
+}
+
+export interface SetupPayload {
+  spaceName: string;
+  members: SetupMemberInput[];
+}
+
 export type WsMessage =
   | { type: "ping"; timestamp: number }
   | { type: "pong"; timestamp: number }

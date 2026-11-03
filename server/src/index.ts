@@ -18,6 +18,7 @@ import type {
   Space,
   CreateTaskPayload,
   UpdateTaskPayload,
+  SetupPayload,
   WsMessage,
 } from "@todo-app/shared";
 
@@ -172,7 +173,11 @@ app.get("/api/health", async (c) => {
 app.get("/api/state", async (c) => {
   const [space] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
   if (!space) {
-    return c.json({ error: "No space initialized" }, 404);
+    return c.json({
+      space: null,
+      members: [],
+      tasks: [],
+    });
   }
 
   const spaceMembers = await db
@@ -192,6 +197,59 @@ app.get("/api/state", async (c) => {
     members: spaceMembers.map(serializeMember),
     tasks: spaceTasks.map(serializeTask),
   });
+});
+
+// First-Run Setup Wizard endpoint: initialize custom Space name and Members dynamically
+app.post("/api/setup", async (c) => {
+  const body = await c.req.json<SetupPayload>();
+  const spaceName = body.spaceName?.trim();
+  if (!spaceName) {
+    return c.json({ error: "Space name is required" }, 400);
+  }
+
+  const validMembers = (body.members || [])
+    .map((m) => ({
+      name: m.name?.trim(),
+      avatar: m.avatar?.trim() || "👤",
+      role: m.role,
+    }))
+    .filter((m) => Boolean(m.name));
+
+  if (validMembers.length === 0) {
+    return c.json({ error: "At least one member is required" }, 400);
+  }
+
+  // Prevent duplicate setup if a space already exists
+  const [existing] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
+  if (existing) {
+    return c.json({ error: "Workspace is already initialized" }, 409);
+  }
+
+  const [createdSpace] = await db
+    .insert(spaces)
+    .values({ name: spaceName })
+    .returning();
+
+  const createdMembers = await db
+    .insert(members)
+    .values(
+      validMembers.map((m, idx) => ({
+        spaceId: createdSpace.id,
+        name: m.name,
+        avatar: m.avatar,
+        role: m.role || (idx === 0 ? "owner" : "member"),
+      }))
+    )
+    .returning();
+
+  const statePayload = {
+    space: serializeSpace(createdSpace),
+    members: createdMembers.map(serializeMember),
+    tasks: [] as Task[],
+  };
+
+  broadcast({ type: "sync:state", payload: statePayload });
+  return c.json(statePayload, 201);
 });
 
 // Spaces list

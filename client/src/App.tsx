@@ -13,21 +13,34 @@ import {
   CalendarClock,
   Sunrise,
 } from "lucide-react";
-import type { Task, Member, CreateTaskPayload, UpdateTaskPayload } from "@todo-app/shared";
+import type {
+  Task,
+  Member,
+  CreateTaskPayload,
+  UpdateTaskPayload,
+  SetupPayload,
+} from "@todo-app/shared";
 import { useFamilySocket, type AppStateData } from "@/hooks/useFamilySocket";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { TaskItemCard } from "@/components/TaskItemCard";
+import { SetupWizard } from "@/components/SetupWizard";
 import { parseQuickCapture, isTaskForTomorrow } from "@/lib/nlp";
 import { triggerHaptic } from "@/lib/haptics";
+
+const ACTIVE_ACTOR_STORAGE_KEY = "activeActorId";
 
 export default function App() {
   const queryClient = useQueryClient();
 
-  const [activeActorId, setActiveActorId] = useState<string | null>(null);
-  const [assigneeId, setAssigneeId] = useState<string | null>(null);
+  const [activeActorId, setActiveActorId] = useState<string | null>(() => {
+    return localStorage.getItem(ACTIVE_ACTOR_STORAGE_KEY);
+  });
+  const [assigneeId, setAssigneeId] = useState<string | null>(() => {
+    return localStorage.getItem(ACTIVE_ACTOR_STORAGE_KEY);
+  });
   const [quickInput, setQuickInput] = useState("");
   const [forceCritical, setForceCritical] = useState(false);
   const [soloMode, setSoloMode] = useState(false);
@@ -36,6 +49,7 @@ export default function App() {
     return saved ? saved === "dark" : true;
   });
   const [proxyPingBanner, setProxyPingBanner] = useState<string | null>(null);
+  const [setupError, setSetupError] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -60,6 +74,30 @@ export default function App() {
     }
   }, [isDarkMode]);
 
+  // Persist chosen member identity in localStorage ("activeActorId")
+  const selectActiveActor = (memberId: string) => {
+    setActiveActorId(memberId);
+    setAssigneeId(memberId);
+    localStorage.setItem(ACTIVE_ACTOR_STORAGE_KEY, memberId);
+  };
+
+  // Validate or initialize activeActorId once members load
+  useEffect(() => {
+    if (data?.members?.length) {
+      const storedId = localStorage.getItem(ACTIVE_ACTOR_STORAGE_KEY);
+      const validStored = storedId && data.members.some((m) => m.id === storedId);
+      const resolvedId = validStored ? storedId : data.members[0].id;
+
+      if (activeActorId !== resolvedId) {
+        setActiveActorId(resolvedId);
+        localStorage.setItem(ACTIVE_ACTOR_STORAGE_KEY, resolvedId);
+      }
+      if (!assigneeId || !data.members.some((m) => m.id === assigneeId)) {
+        setAssigneeId(resolvedId);
+      }
+    }
+  }, [data?.members, activeActorId, assigneeId]);
+
   // WebSocket real-time sync + subtle proxy task notification banner (PRD Section 4)
   const { status: wsStatus } = useFamilySocket({
     onTaskCreated: (created) => {
@@ -81,14 +119,6 @@ export default function App() {
     },
   });
 
-  // Set default actor and assignee once members are loaded
-  useEffect(() => {
-    if (data?.members?.length) {
-      if (!activeActorId) setActiveActorId(data.members[0].id);
-      if (!assigneeId) setAssigneeId(data.members[0].id);
-    }
-  }, [data?.members, activeActorId, assigneeId]);
-
   // Keyboard shortcut: Press 'C' to summon quick capture input
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -102,6 +132,40 @@ export default function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  const setupMutation = useMutation({
+    mutationFn: async ({
+      payload,
+      selectedMemberIndex,
+    }: {
+      payload: SetupPayload;
+      selectedMemberIndex: number;
+    }) => {
+      setSetupError(null);
+      const res = await fetch("/api/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to initialize workspace");
+      }
+      const result = (await res.json()) as AppStateData;
+      return { result, selectedMemberIndex };
+    },
+    onSuccess: ({ result, selectedMemberIndex }) => {
+      const chosenMember =
+        result.members[selectedMemberIndex] || result.members[0];
+      if (chosenMember) {
+        selectActiveActor(chosenMember.id);
+      }
+      queryClient.setQueryData<AppStateData>(["state"], result);
+    },
+    onError: (err: Error) => {
+      setSetupError(err.message);
+    },
+  });
 
   const createTaskMutation = useMutation({
     mutationFn: async (payload: CreateTaskPayload) => {
@@ -214,6 +278,19 @@ export default function App() {
     );
   }
 
+  // First-Run Setup Wizard if no Space is initialized yet
+  if (!data.space) {
+    return (
+      <SetupWizard
+        isSubmitting={setupMutation.isPending}
+        error={setupError}
+        onSubmit={(payload, selectedMemberIndex) =>
+          setupMutation.mutate({ payload, selectedMemberIndex })
+        }
+      />
+    );
+  }
+
   const { space, members, tasks } = data;
   const memberById = new Map<string, Member>(members.map((m) => [m.id, m]));
   const activeActor = activeActorId ? memberById.get(activeActorId) : members[0];
@@ -280,8 +357,7 @@ export default function App() {
                   data-testid={`switch-actor-${m.name.toLowerCase()}`}
                   onClick={() => {
                     triggerHaptic(10);
-                    setActiveActorId(m.id);
-                    setAssigneeId(m.id);
+                    selectActiveActor(m.id);
                   }}
                   className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                     activeActorId === m.id

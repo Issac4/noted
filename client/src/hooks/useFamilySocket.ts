@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { WsMessage, Task, Member, Space } from "@todo-app/shared";
 
 export interface AppStateData {
-  space: Space;
+  space: Space | null;
   members: Member[];
   tasks: Task[];
 }
@@ -123,6 +123,8 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
                 members: [...prev.members, msg.payload],
               };
             });
+          } else if (msg.type === "sync:state") {
+            queryClient.setQueryData<AppStateData>(["state"], msg.payload);
           }
         } catch (err) {
           console.error("Failed to parse WebSocket message:", err);
