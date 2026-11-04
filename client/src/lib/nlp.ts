@@ -77,14 +77,18 @@ export function parseQuickCapture(rawInput: string): ParsedQuickCapture {
     if (monthIndex !== undefined && dayNum >= 1 && dayNum <= 31) {
       let year = now.getFullYear();
       const candidate = new Date(year, monthIndex, dayNum, 9, 0, 0, 0);
-      if (candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
-        year += 1;
+      if (candidate.getMonth() === monthIndex && candidate.getDate() === dayNum) {
+        if (candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
+          year += 1;
+        }
+        const target = new Date(year, monthIndex, dayNum, 9, 0, 0, 0);
+        if (target.getMonth() === monthIndex && target.getDate() === dayNum) {
+          dueDate = target.toISOString();
+          detectedKeywords.push(
+            `📅 Due ${target.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+          );
+        }
       }
-      const target = new Date(year, monthIndex, dayNum, 9, 0, 0, 0);
-      dueDate = target.toISOString();
-      detectedKeywords.push(
-        `📅 Due ${target.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
-      );
     }
   } else if (inDaysMatch) {
     const days = parseInt(inDaysMatch[1], 10);
@@ -116,10 +120,6 @@ export function parseQuickCapture(rawInput: string): ParsedQuickCapture {
     if (type !== "critical") {
       targetBucket = "today";
     }
-  } else if (type === "critical") {
-    const target = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-    dueDate = target.toISOString();
-    detectedKeywords.push("📅 +3 Days Cutoff");
   }
 
   if (type === "critical") {
@@ -150,7 +150,7 @@ export function getDaysLeftInfo(dueDateStr: string | null): {
   urgency: "overdue" | "imminent" | "upcoming";
 } {
   if (!dueDateStr) {
-    return { label: "Cutoff Pending", daysLeft: 3, urgency: "upcoming" };
+    return { label: "Date needed", daysLeft: 0, urgency: "upcoming" };
   }
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -170,7 +170,7 @@ export function getDaysLeftInfo(dueDateStr: string | null): {
     };
   }
   if (days === 0) {
-    return { label: "Due Today (9:00 AM)", daysLeft: 0, urgency: "overdue" };
+    return { label: "Due today", daysLeft: 0, urgency: "imminent" };
   }
   if (days === 1) {
     return { label: "1 Day Left", daysLeft: 1, urgency: "imminent" };

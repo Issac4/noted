@@ -135,6 +135,7 @@ export const TaskItemCard: React.FC<TaskItemCardProps> = ({
               {isProxy && creator && (
                 <span
                   data-testid="proxy-attribution"
+                  title="Based on the device profile selected when this task was added"
                   className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/25 font-medium"
                 >
                   Noted by {creator.name} 📝

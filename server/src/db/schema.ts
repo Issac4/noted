@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const taskTypeEnum = pgEnum("task_type", ["critical", "daily"]);
@@ -60,6 +60,16 @@ export const pushSubscriptions = pgTable("push_subscriptions", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const criticalAlertDeliveries = pgTable("critical_alert_deliveries", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  taskId: uuid("task_id")
+    .notNull()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  alertDate: text("alert_date").notNull(),
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+}, (table) => [uniqueIndex("critical_alert_task_date_unique").on(table.taskId, table.alertDate)]);
+
 export const spacesRelations = relations(spaces, ({ many }) => ({
   members: many(members),
   tasks: many(tasks),
@@ -90,6 +100,13 @@ export const tasksRelations = relations(tasks, ({ one }) => ({
     fields: [tasks.createdBy],
     references: [members.id],
     relationName: "createdTasks",
+  }),
+}));
+
+export const criticalAlertDeliveriesRelations = relations(criticalAlertDeliveries, ({ one }) => ({
+  task: one(tasks, {
+    fields: [criticalAlertDeliveries.taskId],
+    references: [tasks.id],
   }),
 }));
 

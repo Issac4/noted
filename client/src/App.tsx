@@ -60,6 +60,12 @@ export default function App() {
   });
   const [quickInput, setQuickInput] = useState("");
   const [forceCritical, setForceCritical] = useState(false);
+  const [criticalDueDate, setCriticalDueDate] = useState("");
+  const [captureError, setCaptureError] = useState<string | null>(null);
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [newMemberName, setNewMemberName] = useState("");
+  const [newMemberAvatar, setNewMemberAvatar] = useState("✨");
+  const [addMemberError, setAddMemberError] = useState<string | null>(null);
   const [soloMode, setSoloMode] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     const saved = localStorage.getItem("todo-theme");
@@ -297,7 +303,6 @@ export default function App() {
       setIsLocked(false);
       setUnlockError(null);
       queryClient.setQueryData<AppStateData>(["state", enteredPin], stateResult);
-      queryClient.setQueryData<AppStateData>(["state"], stateResult);
       triggerHaptic([15, 25, 15]);
     } catch {
       setUnlockError("Could not reach server to verify passcode.");
@@ -344,7 +349,6 @@ export default function App() {
         spaceName: result.space?.name ?? null,
       });
       queryClient.setQueryData<AppStateData>(["state", passcode], result);
-      queryClient.setQueryData<AppStateData>(["state"], result);
     },
     onError: (err: Error) => {
       setSetupError(err.message);
@@ -362,7 +366,10 @@ export default function App() {
         setIsLocked(true);
         throw new Error("Unauthorized");
       }
-      if (!res.ok) throw new Error("Failed to create task");
+      if (!res.ok) {
+        const error = await res.json().catch(() => null);
+        throw new Error(error?.error || "Could not add task. Please try again.");
+      }
       return res.json() as Promise<Task>;
     },
     onSuccess: (created) => {
@@ -370,6 +377,31 @@ export default function App() {
         if (!prev) return prev;
         if (prev.tasks.some((t) => t.id === created.id)) return prev;
         return { ...prev, tasks: [created, ...prev.tasks] };
+      });
+    },
+  });
+
+  const createMemberMutation = useMutation({
+    mutationFn: async (payload: { spaceId: string; name: string; avatar: string }) => {
+      const res = await fetch("/api/members", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload),
+      });
+      if (res.status === 401) {
+        setIsLocked(true);
+        throw new Error("Unauthorized");
+      }
+      if (!res.ok) {
+        const error = await res.json().catch(() => null);
+        throw new Error(error?.error || "Could not add member. Please try again.");
+      }
+      return res.json() as Promise<Member>;
+    },
+    onSuccess: (created) => {
+      queryClient.setQueryData<AppStateData>(["state", storedPasscode], (prev) => {
+        if (!prev || prev.members.some((member) => member.id === created.id)) return prev;
+        return { ...prev, members: [...prev.members, created] };
       });
     },
   });
@@ -431,31 +463,39 @@ export default function App() {
     return parseQuickCapture(quickInput);
   }, [quickInput]);
 
-  const handleCaptureSubmit = (e: React.FormEvent) => {
+  const handleCaptureSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!quickInput.trim() || !activeActorId || !assigneeId || !data?.space) return;
+    if (!quickInput.trim() || !activeActorId || !assigneeId || !data?.space || createTaskMutation.isPending) return;
 
     const parsed = parseQuickCapture(quickInput);
     const finalType = forceCritical ? "critical" : parsed.type;
-    const finalDueDate =
-      finalType === "critical" && !parsed.dueDate
-        ? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
-        : parsed.dueDate;
+    const finalDueDate = finalType === "critical" && criticalDueDate
+      ? new Date(`${criticalDueDate}T09:00:00`).toISOString()
+      : parsed.dueDate;
 
-    triggerHaptic(12);
+    if (finalType === "critical" && !finalDueDate) {
+      setCaptureError("Choose a date for this critical deadline.");
+      return;
+    }
 
-    createTaskMutation.mutate({
-      spaceId: data.space.id,
-      title: parsed.title,
-      note: parsed.note,
-      type: finalType,
-      dueDate: finalDueDate,
-      assignedTo: assigneeId,
-      createdBy: activeActorId,
-    });
-
-    setQuickInput("");
-    setForceCritical(false);
+    setCaptureError(null);
+    try {
+      await createTaskMutation.mutateAsync({
+        spaceId: data.space.id,
+        title: parsed.title,
+        note: parsed.note,
+        type: finalType,
+        dueDate: finalDueDate,
+        assignedTo: assigneeId,
+        createdBy: activeActorId,
+      });
+      triggerHaptic(12);
+      setQuickInput("");
+      setForceCritical(false);
+      setCriticalDueDate("");
+    } catch (error) {
+      setCaptureError(error instanceof Error ? error.message : "Could not add task. Please try again.");
+    }
   };
 
   if (isAuthStatusLoading || (shouldFetchState && isStateLoading)) {
@@ -540,12 +580,25 @@ export default function App() {
   });
   const visibleMembers = soloMode && activeActor ? [activeActor] : orderedMembers;
 
-  const cycleAssignee = () => {
-    if (!members.length) return;
-    triggerHaptic(10);
-    const idx = members.findIndex((m) => m.id === assigneeId);
-    const next = members[(idx + 1) % members.length];
-    setAssigneeId(next.id);
+  const handleAddMember = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const name = newMemberName.trim();
+    if (!name || createMemberMutation.isPending) return;
+    if (members.some((member) => member.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      setAddMemberError("That name is already on the board.");
+      return;
+    }
+    setAddMemberError(null);
+    try {
+      await createMemberMutation.mutateAsync({ spaceId: space.id, name, avatar: newMemberAvatar });
+      setNewMemberName("");
+      setNewMemberAvatar("✨");
+      setShowAddMember(false);
+      setSoloMode(false);
+      triggerHaptic(12);
+    } catch (error) {
+      setAddMemberError(error instanceof Error ? error.message : "Could not add member. Please try again.");
+    }
   };
 
   return (
@@ -571,44 +624,36 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* Device Identity Selector ("Who is using this device?") */}
-            <div
+            <label
               data-testid="actor-switcher"
-              className="flex items-center gap-1 bg-secondary/60 p-1 rounded-lg border border-border/60"
+              title="Profiles identify this device for convenience; they are not separate sign-ins"
+              className="flex items-center gap-2 text-xs text-muted-foreground"
             >
-              <span className="text-[11px] text-muted-foreground px-2">
-                Who is using this device?
-              </span>
-              {members.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  data-testid={`switch-actor-${m.name.toLowerCase()}`}
-                  onClick={() => {
-                    triggerHaptic(10);
-                    selectActiveActor(m.id);
-                  }}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    activeActorId === m.id
-                      ? "bg-primary text-primary-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {m.avatar} {m.name}
-                </button>
-              ))}
-            </div>
+              Using as
+              <select
+                value={activeActor?.id || ""}
+                onChange={(event) => {
+                  triggerHaptic(10);
+                  selectActiveActor(event.target.value);
+                }}
+                data-testid="device-profile-select"
+                className="h-8 max-w-40 rounded-md border border-border bg-secondary px-2 text-xs font-medium text-foreground"
+              >
+                {members.map((member) => (
+                  <option key={member.id} value={member.id}>{member.avatar} {member.name}</option>
+                ))}
+              </select>
+            </label>
 
-            {/* Solo / Dual Action Board toggle */}
-            <Button
+            {members.length > 1 && <Button
               variant="outline"
               size="sm"
               data-testid="view-mode-toggle"
               onClick={() => setSoloMode((v) => !v)}
               className="text-xs h-8"
             >
-              {soloMode ? "👤 My Focus Only" : "👥 Dual Action Board"}
-            </Button>
+              {soloMode ? "👤 My tasks" : `👥 Everyone (${members.length})`}
+            </Button>}
 
             {/* Phone Web Push Notification Toggle / Test Button */}
             <Button
@@ -625,7 +670,7 @@ export default function App() {
               title={
                 pushEnabled
                   ? "Push alerts are active for this device. Tap to send a test notification."
-                  : "Enable background phone push notifications for partner notes & critical deadlines"
+                  : "Enable background phone push notifications for tasks from others and critical deadlines"
               }
             >
               <BellRing className="w-3.5 h-3.5" />
@@ -751,27 +796,52 @@ export default function App() {
           </Card>
         </section>
 
-        {/* Module 2: Dual Action Board (My Focus vs. Partner Focus) */}
+        {/* Member focus board */}
         <section aria-label="Today and Tomorrow Action Board" className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Sun className="w-4 h-4 text-primary" />
-              <h2 className="text-sm font-semibold tracking-tight">
-                ☀️ Today & Tomorrow Action Board
-              </h2>
+              <h2 className="text-sm font-semibold tracking-tight">☀️ Everyone's tasks</h2>
             </div>
-            <span className="text-xs text-muted-foreground">
-              Press{" "}
-              <kbd className="px-1.5 py-0.5 text-[10px] rounded bg-secondary border">C</kbd> to
-              quick capture • Click any task to attach a{" "}
-              <span className="text-foreground font-medium">Context Note</span>
-            </span>
+            <Button type="button" variant="outline" size="sm" onClick={() => setShowAddMember((current) => !current)} className="h-8 text-xs">
+              {showAddMember ? "Cancel" : "+ Add member"}
+            </Button>
           </div>
+
+          {showAddMember && (
+            <form onSubmit={handleAddMember} className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3">
+              <select
+                aria-label="New member avatar"
+                value={newMemberAvatar}
+                onChange={(event) => setNewMemberAvatar(event.target.value)}
+                className="h-10 rounded-md border border-border bg-background px-2 text-lg"
+              >
+                {["✨", "🌸", "⭐", "🌿", "🦊", "🐱", "🎨", "🚀"].map((avatar) => <option key={avatar} value={avatar}>{avatar}</option>)}
+              </select>
+              <Input
+                aria-label="New member name"
+                value={newMemberName}
+                onChange={(event) => {
+                  setNewMemberName(event.target.value);
+                  setAddMemberError(null);
+                }}
+                placeholder="Name of family member or friend"
+                className="h-10 min-w-48 flex-1"
+                autoFocus
+              />
+              <Button type="submit" size="sm" disabled={!newMemberName.trim() || createMemberMutation.isPending} className="h-10">
+                {createMemberMutation.isPending ? "Adding..." : "Add to board"}
+              </Button>
+              {addMemberError && <p role="alert" className="w-full text-xs text-destructive">{addMemberError}</p>}
+            </form>
+          )}
 
           <div
             data-testid="action-board-grid"
             className={`grid gap-4 ${
-              visibleMembers.length > 1 ? "md:grid-cols-2" : "grid-cols-1"
+              visibleMembers.length > 2
+                ? "md:grid-cols-2 xl:grid-cols-3"
+                : visibleMembers.length > 1 ? "md:grid-cols-2" : "grid-cols-1"
             }`}
           >
             {visibleMembers.map((member) => {
@@ -822,7 +892,7 @@ export default function App() {
                       }}
                       className="text-xs h-8"
                     >
-                      {isSelf ? "+ Add to My Focus" : `📝 Proxy Note for ${member.name}`}
+                      {isSelf ? "+ Add to My Focus" : `+ Task for ${member.name}`}
                     </Button>
                   </CardHeader>
 
@@ -925,7 +995,7 @@ export default function App() {
               <span className="text-muted-foreground">Smart Capture:</span>
               {activeActorId !== assigneeId && targetAssignee && activeActor && (
                 <span className="px-2 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/30 font-medium">
-                  📝 Proxy for {targetAssignee.name} (Noted by {activeActor.name})
+                  📝 For {targetAssignee.name} (from this device's {activeActor.name} profile)
                 </span>
               )}
               {forceCritical && !liveNlpPreview?.detectedKeywords.includes("🚨 Critical Deadline") && (
@@ -944,24 +1014,26 @@ export default function App() {
             </div>
           ) : null}
 
-          <form onSubmit={handleCaptureSubmit} className="flex items-center gap-2">
-            {/* One-Tap Self vs Partner Assignee Toggle */}
-            <Button
-              type="button"
-              variant={activeActorId !== assigneeId ? "default" : "secondary"}
-              size="sm"
-              onClick={cycleAssignee}
+          <form id="quick-capture-form" onSubmit={handleCaptureSubmit} className="flex items-center gap-2">
+            <label
               data-testid="assignee-toggle"
-              className="shrink-0 gap-1.5 text-xs h-10"
-              title="One-tap toggle: assign to yourself or proxy-note for partner"
+              className="flex shrink-0 items-center gap-1.5 text-xs"
             >
               <UserCheck className="w-3.5 h-3.5" />
-              <span>
-                {activeActorId === assigneeId
-                  ? `Self (${targetAssignee?.avatar} ${targetAssignee?.name})`
-                  : `Proxy → ${targetAssignee?.avatar} ${targetAssignee?.name}`}
-              </span>
-            </Button>
+              <span className="sr-only">Task for</span>
+              <select
+                value={assigneeId || activeActor?.id || ""}
+                onChange={(event) => {
+                  triggerHaptic(10);
+                  setAssigneeId(event.target.value);
+                }}
+                className="h-10 max-w-32 rounded-md border border-border bg-secondary px-2 font-medium text-foreground"
+              >
+                {members.map((member) => (
+                  <option key={member.id} value={member.id}>{member.avatar} {member.name}</option>
+                ))}
+              </select>
+            </label>
 
             {/* Critical toggle pill */}
             <Button
@@ -972,6 +1044,8 @@ export default function App() {
               onClick={() => {
                 triggerHaptic(10);
                 setForceCritical((v) => !v);
+                setCriticalDueDate("");
+                setCaptureError(null);
               }}
               className="shrink-0 text-xs h-10"
               title="Toggle Critical Hard Deadline"
@@ -982,8 +1056,12 @@ export default function App() {
             <Input
               ref={inputRef}
               value={quickInput}
-              onChange={(e) => setQuickInput(e.target.value)}
+              onChange={(e) => {
+                setQuickInput(e.target.value);
+                setCaptureError(null);
+              }}
               data-testid="quick-capture-input"
+              disabled={createTaskMutation.isPending}
               placeholder={
                 activeActorId !== assigneeId
                   ? `Noting for ${targetAssignee?.name}... (e.g. 'Pick up prescription tomorrow // 500mg')`
@@ -1003,6 +1081,25 @@ export default function App() {
               <span className="hidden sm:inline">Send</span>
             </Button>
           </form>
+          {(forceCritical || liveNlpPreview?.type === "critical") && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              Deadline date
+              <Input
+                type="date"
+                form="quick-capture-form"
+                value={criticalDueDate}
+                onChange={(e) => {
+                  setCriticalDueDate(e.target.value);
+                  setCaptureError(null);
+                }}
+                disabled={createTaskMutation.isPending}
+                data-testid="critical-due-date-input"
+                className="w-40 h-8 bg-background"
+              />
+              {liveNlpPreview?.dueDate && !criticalDueDate && "Using the date found in your task"}
+            </label>
+          )}
+          {captureError && <p role="alert" className="text-xs text-destructive">{captureError}</p>}
         </div>
       </div>
     </div>

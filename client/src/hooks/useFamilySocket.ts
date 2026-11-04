@@ -28,6 +28,7 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
 
   const enabled = options?.enabled ?? true;
   const passcode = options?.passcode ?? null;
+  const stateQueryKey = ["state", passcode] as const;
 
   useEffect(() => {
     if (!enabled) {
@@ -92,7 +93,7 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
           }
 
           if (msg.type === "task:created") {
-            queryClient.setQueryData<AppStateData>(["state"], (prev) => {
+            queryClient.setQueryData<AppStateData>(stateQueryKey, (prev) => {
               if (!prev) return prev;
               const exists = prev.tasks.some((t) => t.id === msg.payload.id);
               if (exists) {
@@ -108,7 +109,7 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
             });
             optionsRef.current?.onTaskCreated?.(msg.payload);
           } else if (msg.type === "task:updated") {
-            queryClient.setQueryData<AppStateData>(["state"], (prev) => {
+            queryClient.setQueryData<AppStateData>(stateQueryKey, (prev) => {
               if (!prev) return prev;
               return {
                 ...prev,
@@ -117,7 +118,7 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
             });
             optionsRef.current?.onTaskUpdated?.(msg.payload);
           } else if (msg.type === "task:deleted") {
-            queryClient.setQueryData<AppStateData>(["state"], (prev) => {
+            queryClient.setQueryData<AppStateData>(stateQueryKey, (prev) => {
               if (!prev) return prev;
               return {
                 ...prev,
@@ -125,7 +126,7 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
               };
             });
           } else if (msg.type === "member:created") {
-            queryClient.setQueryData<AppStateData>(["state"], (prev) => {
+            queryClient.setQueryData<AppStateData>(stateQueryKey, (prev) => {
               if (!prev) return prev;
               const exists = prev.members.some((m) => m.id === msg.payload.id);
               if (exists) return prev;
@@ -135,7 +136,7 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
               };
             });
           } else if (msg.type === "sync:state") {
-            queryClient.setQueryData<AppStateData>(["state"], msg.payload);
+            queryClient.setQueryData<AppStateData>(stateQueryKey, msg.payload);
           }
         } catch (err) {
           console.error("Failed to parse WebSocket message:", err);

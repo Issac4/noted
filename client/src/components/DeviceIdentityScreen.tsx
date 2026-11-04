@@ -29,15 +29,15 @@ export const DeviceIdentityScreen: React.FC<DeviceIdentityScreenProps> = ({
             Who is using this device?
           </h1>
           <p className="text-sm text-muted-foreground">
-            Choose your profile for <span className="text-foreground font-medium">{spaceName}</span>.
-            We&apos;ll remember your choice on this browser.
+            Choose whose profile this device uses in <span className="text-foreground font-medium">{spaceName}</span>.
+            Household members can switch profiles at any time.
           </p>
         </div>
 
         <Card className="border-border/80 shadow-lg">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm text-muted-foreground font-medium">
-              Select your household identity
+              Select a device profile
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2.5">

@@ -29,6 +29,7 @@ services:
       PORT: 3000
       DATABASE_URL: postgresql://${POSTGRES_USER:-todo_admin}:${POSTGRES_PASSWORD:-todo_password}@db:5432/${POSTGRES_DB:-family_todo}
       AUTO_MIGRATE: "true"
+      ALERT_TIME_ZONE: ${ALERT_TIME_ZONE:-America/Toronto}
     ports:
       - "${APP_PORT:-3000}:3000"
     labels:

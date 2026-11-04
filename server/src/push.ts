@@ -1,7 +1,8 @@
 import webpush from "web-push";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull, lt, or } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { spaces, pushSubscriptions, tasks, members } from "./db/schema.js";
+import { spaces, pushSubscriptions, tasks, criticalAlertDeliveries } from "./db/schema.js";
+import { criticalAlertForToday } from "./alertSchedule.js";
 
 export interface PushNotificationPayload {
   title: string;
@@ -112,22 +113,13 @@ export async function sendPushNotification(
   return { sent, failed };
 }
 
-// Track which critical task alerts have already fired today (`${taskId}:${dateStr}`)
-const firedCriticalAlerts = new Set<string>();
-
 /**
- * Checks pending critical hard deadlines and fires D-3, D-1, and Due-Date (D-0) alerts at 9:00 AM
+ * Checks pending critical hard deadlines and fires D-3, D-1, and Due-Date (D-0) alerts after 9:00 AM
  * (per PRD Section 2 Module 1 & Section 4 Strict Notification Protocol).
  */
 export async function evaluateCriticalDeadlineAlerts() {
   const now = new Date();
-  // Fire during the 9:00 AM hour local server time
-  if (now.getHours() !== 9) {
-    return;
-  }
-
-  const todayKey = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const timeZone = process.env.ALERT_TIME_ZONE || "America/Toronto";
 
   const pendingCriticals = await db
     .select()
@@ -136,17 +128,28 @@ export async function evaluateCriticalDeadlineAlerts() {
 
   for (const task of pendingCriticals) {
     if (!task.dueDate) continue;
+    const alert = criticalAlertForToday(now, task.dueDate, timeZone);
+    if (alert) {
+      const { alertDate: todayKey, daysLeft } = alert;
+      await db.insert(criticalAlertDeliveries)
+        .values({ taskId: task.id, alertDate: todayKey })
+        .onConflictDoNothing();
 
-    const dedupeKey = `${task.id}:${todayKey}`;
-    if (firedCriticalAlerts.has(dedupeKey)) continue;
-
-    const due = new Date(task.dueDate);
-    const startOfDue = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
-    const daysLeft = Math.round((startOfDue - startOfToday) / (1000 * 60 * 60 * 24));
-
-    // Only trigger at D-3, D-1, or D-0 (morning of due date)
-    if (daysLeft === 3 || daysLeft === 1 || daysLeft === 0) {
-      firedCriticalAlerts.add(dedupeKey);
+      // A claimed row survives restarts. An abandoned claim becomes retryable after ten minutes.
+      const claimTime = new Date();
+      const [claimed] = await db.update(criticalAlertDeliveries)
+        .set({ claimedAt: claimTime })
+        .where(and(
+          eq(criticalAlertDeliveries.taskId, task.id),
+          eq(criticalAlertDeliveries.alertDate, todayKey),
+          isNull(criticalAlertDeliveries.sentAt),
+          or(
+            isNull(criticalAlertDeliveries.claimedAt),
+            lt(criticalAlertDeliveries.claimedAt, new Date(claimTime.getTime() - 10 * 60 * 1000))
+          )
+        ))
+        .returning();
+      if (!claimed) continue;
 
       const whenLabel =
         daysLeft === 0
@@ -155,16 +158,29 @@ export async function evaluateCriticalDeadlineAlerts() {
           ? "due tomorrow (1 day left)"
           : "due in 3 days";
 
-      await sendPushNotification(
-        task.spaceId,
-        {
-          title: `⚠️ [Critical] ${task.title}`,
-          body: `${task.title} is ${whenLabel}.${task.note ? ` (${task.note})` : ""}`,
-          tag: `critical-${task.id}-${todayKey}`,
-          url: "/",
-        },
-        task.assignedTo
-      );
+      try {
+        const result = await sendPushNotification(
+          task.spaceId,
+          {
+            title: `⚠️ [Critical] ${task.title}`,
+            body: `${task.title} is ${whenLabel}.${task.note ? ` (${task.note})` : ""}`,
+            tag: `critical-${task.id}-${todayKey}`,
+            url: "/",
+          },
+          task.assignedTo
+        );
+        if (result.failed > 0) {
+          throw new Error(`${result.failed} push delivery attempt(s) failed`);
+        }
+        await db.update(criticalAlertDeliveries)
+          .set({ sentAt: new Date(), claimedAt: null })
+          .where(eq(criticalAlertDeliveries.id, claimed.id));
+      } catch (error) {
+        await db.update(criticalAlertDeliveries)
+          .set({ claimedAt: null })
+          .where(and(eq(criticalAlertDeliveries.id, claimed.id), isNull(criticalAlertDeliveries.sentAt)));
+        console.error(`Critical alert delivery failed for task ${task.id}:`, error);
+      }
     }
   }
 }

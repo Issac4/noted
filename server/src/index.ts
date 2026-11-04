@@ -405,9 +405,12 @@ app.post("/api/tasks", async (c) => {
   let parsedDueDate: Date | null = null;
   if (body.dueDate) {
     parsedDueDate = new Date(body.dueDate);
-  } else if (taskType === "critical") {
-    // Default critical deadline to +3 days if not specified
-    parsedDueDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+    if (Number.isNaN(parsedDueDate.getTime())) {
+      return c.json({ error: "Enter a valid due date" }, 400);
+    }
+  }
+  if (taskType === "critical" && !parsedDueDate) {
+    return c.json({ error: "Critical tasks need a real deadline date" }, 400);
   }
 
   const [created] = await db
@@ -533,6 +536,19 @@ app.post("/api/push/test", async (c) => {
 app.patch("/api/tasks/:id", async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json<UpdateTaskPayload>();
+  const [existing] = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1);
+  if (!existing) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+  const nextDueDate = body.dueDate === undefined
+    ? existing.dueDate
+    : body.dueDate ? new Date(body.dueDate) : null;
+  if (nextDueDate && Number.isNaN(nextDueDate.getTime())) {
+    return c.json({ error: "Enter a valid due date" }, 400);
+  }
+  if ((body.type ?? existing.type) === "critical" && !nextDueDate) {
+    return c.json({ error: "Critical tasks need a real deadline date" }, 400);
+  }
 
   const updateData: Record<string, unknown> = {
     updatedAt: new Date(),
@@ -542,7 +558,7 @@ app.patch("/api/tasks/:id", async (c) => {
   if (body.note !== undefined) updateData.note = body.note ? body.note.trim() : null;
   if (body.type !== undefined) updateData.type = body.type;
   if (body.dueDate !== undefined) {
-    updateData.dueDate = body.dueDate ? new Date(body.dueDate) : null;
+    updateData.dueDate = nextDueDate;
   }
   if (body.assignedTo !== undefined) updateData.assignedTo = body.assignedTo;
   if (body.status !== undefined) updateData.status = body.status;
@@ -602,6 +618,10 @@ async function startServer() {
     await runMigrations();
     await ensureDefaultSeed();
   }
+
+  evaluateCriticalDeadlineAlerts().catch((err) =>
+    console.error("Initial critical deadline check error:", err)
+  );
 
   const port = Number(process.env.PORT || 3000);
   const server = serve(

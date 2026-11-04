@@ -200,7 +200,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
               <CardHeader>
                 <CardTitle className="text-lg">Step 2: Household Members</CardTitle>
                 <p className="text-xs text-muted-foreground">
-                  Add 1 member for Solo Mode, or 2–4 members for side-by-side collaborative visibility.
+                  Add everyone who will share this board. You can add more people later.
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -222,7 +222,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                           placeholder={
                             idx === 0
                               ? "Your name (e.g. Alex)"
-                              : `Member ${idx + 1} name (e.g. Sam / Partner)`
+                              : `Member ${idx + 1} name (e.g. Sam)`
                           }
                           className="h-9 flex-1 bg-background"
                           autoFocus={idx === 0}
@@ -274,8 +274,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                   ))}
                 </div>
 
-                {members.length < 6 && (
-                  <Button
+                <Button
                     type="button"
                     variant="outline"
                     size="sm"
@@ -286,7 +285,6 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                     <Plus className="w-3.5 h-3.5" />
                     Add Another Member
                   </Button>
-                )}
 
                 {error && (
                   <p className="text-xs text-destructive bg-destructive/10 p-2 rounded-md">
