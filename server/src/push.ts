@@ -52,14 +52,15 @@ export async function ensureSpaceVapidKeys(spaceId: string): Promise<{
 export async function sendPushNotification(
   spaceId: string,
   payload: PushNotificationPayload,
-  targetMemberId?: string
-): Promise<{ sent: number; failed: number }> {
+  targetMemberId?: string,
+  targetEndpoint?: string
+): Promise<{ sent: number; failed: number; expired: number; rejectedStatusCodes: number[] }> {
   const keys = await ensureSpaceVapidKeys(spaceId);
   const contactEmail = process.env.VAPID_SUBJECT || "mailto:admin@noted.local";
 
   webpush.setVapidDetails(contactEmail, keys.publicKey, keys.privateKey);
 
-  const subs = targetMemberId
+  const memberSubs = targetMemberId
     ? await db
         .select()
         .from(pushSubscriptions)
@@ -74,8 +75,11 @@ export async function sendPushNotification(
         .from(pushSubscriptions)
         .where(eq(pushSubscriptions.spaceId, spaceId));
 
+  const subs = targetEndpoint ? memberSubs.filter(sub => sub.endpoint === targetEndpoint) : memberSubs;
   let sent = 0;
   let failed = 0;
+  let expired = 0;
+  const rejectedStatusCodes = new Set<number>();
 
   const message = JSON.stringify({
     title: payload.title,
@@ -100,8 +104,10 @@ export async function sendPushNotification(
         sent += 1;
       } catch (err: any) {
         failed += 1;
+        if (typeof err?.statusCode === "number") rejectedStatusCodes.add(err.statusCode);
         // Clean up expired or unsubscribed endpoints
         if (err?.statusCode === 404 || err?.statusCode === 410) {
+          expired += 1;
           await db.delete(pushSubscriptions).where(eq(pushSubscriptions.id, sub.id));
         } else {
           console.error("Web Push delivery error:", err?.message || err);
@@ -110,7 +116,7 @@ export async function sendPushNotification(
     })
   );
 
-  return { sent, failed };
+  return { sent, failed, expired, rejectedStatusCodes: [...rejectedStatusCodes] };
 }
 
 /**

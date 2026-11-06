@@ -1,11 +1,8 @@
 // Service Worker Push Notification Handler for Noted PWA
-// Strict Notification Protocol (PRD Section 4):
-// 1. Proxy Task Capture Alert
-// 2. Critical Hard Deadlines (D-3, D-1, D-0 at 9:00 AM)
+// Direct messages, assigned tasks and critical deadline reminders.
+// Always show a visible notification, including for a push with no payload.
 
 self.addEventListener("push", (event) => {
-  if (!event.data) return;
-
   let payload = {
     title: "Noted",
     body: "You have a new household alert.",
@@ -14,10 +11,10 @@ self.addEventListener("push", (event) => {
   };
 
   try {
-    const parsed = event.data.json();
+    const parsed = event.data ? event.data.json() : {};
     payload = { ...payload, ...parsed };
   } catch {
-    payload.body = event.data.text();
+    payload.body = event.data ? event.data.text() : payload.body;
   }
 
   const options = {

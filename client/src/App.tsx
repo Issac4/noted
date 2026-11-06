@@ -207,16 +207,17 @@ export default function App() {
     if (!activeActorId || isPushBusy) return;
     setIsPushBusy(true);
     try {
-      if (!pushEnabled) {
-        const result = await subscribeDeviceToPush(activeActorId, getAuthHeaders());
-        if (!result.ok) { setBanner(`⚠️ ${result.error}`); return; }
-        setPushEnabled(true);
-      }
-      const sent = await sendTestPushNotification(activeActorId, getAuthHeaders());
-      setBanner(sent ? "🔔 Test alert sent to this device." : "⚠️ Alerts enabled, but the test could not be delivered.");
+      const subscription = await subscribeDeviceToPush(activeActorId, getAuthHeaders());
+      setPushEnabled(subscription.ok);
+      if (!subscription.ok) { setBanner(`⚠️ ${subscription.error}`); return; }
+      const test = await sendTestPushNotification(activeActorId, getAuthHeaders());
+      if (!test.ok) setPushEnabled(false);
+      setBanner(test.ok
+        ? "🔔 Push service accepted this device’s test. Check Notification Center; if it is missing, check Noted’s notification settings and Focus. Delivery to your screen is not confirmed."
+        : `⚠️ ${test.error}`);
     } finally {
       setIsPushBusy(false);
-      window.setTimeout(() => setBanner(null), 6000);
+      window.setTimeout(() => setBanner(null), 20000);
     }
   }
 

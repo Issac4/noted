@@ -5,6 +5,7 @@ import { parseQuickCapture } from "@/lib/nlp";
 import { triggerHaptic } from "@/lib/haptics";
 import { dateKey, dashboardGroups, weekDays } from "@/lib/dashboard";
 import "./candy.css";
+import { getPushSetupError } from "@/lib/push";
 
 interface WorkspaceProps {
   space: Space;
@@ -172,6 +173,7 @@ export function Workspace({ space, members, tasks, messages, actor, connection, 
       </div>
     </header>
     {banner && <div className="candy-banner" role="status">{banner}</div>}
+    {getPushSetupError() && <p className="candy-alert-help">{getPushSetupError()}</p>}
     <section className="candy-intro"><div><div className="candy-eyebrow">{now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} · {actor.name}'s day</div><h1>Good things get done.</h1><p>Priority keeps important work visible. Deadlines show when it is due.</p></div><div className="candy-count"><b>{groups.high.length}</b> high-priority {groups.high.length === 1 ? "task" : "tasks"}</div></section>
     <div className="candy-layout">
       <main className="candy-main" id="dashboard">

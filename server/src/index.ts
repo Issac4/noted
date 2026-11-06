@@ -573,7 +573,8 @@ app.post("/api/push/unsubscribe", async (c) => {
 });
 
 app.post("/api/push/test", async (c) => {
-  const body = await c.req.json<{ memberId: string }>();
+  const body = await c.req.json<{ memberId: string; endpoint?: string }>();
+  if (!body.memberId || !body.endpoint) return c.json({ ok: false, error: "Enable alerts on this device before testing." }, 400);
   const [space] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
   if (!space) {
     return c.json({ error: "No space initialized" }, 404);
@@ -582,20 +583,26 @@ app.post("/api/push/test", async (c) => {
   const [member] = await db
     .select()
     .from(members)
-    .where(eq(members.id, body.memberId))
+    .where(and(eq(members.id, body.memberId), eq(members.spaceId, space.id)))
     .limit(1);
+
+  if (!member) return c.json({ ok: false, error: "Choose a valid member before enabling alerts." }, 400);
 
   const result = await sendPushNotification(
     space.id,
     {
       title: `🔔 Noted Alerts Active (${member?.name || "Device"})`,
       body: "You'll get alerts for messages, tasks from others, and critical deadlines.",
-      tag: "noted-test-ping",
+      tag: `noted-test-${Date.now()}`,
       url: "/",
     },
-    body.memberId
+    body.memberId,
+    body.endpoint
   );
 
+  if (result.sent === 0) return c.json({ ok: false, ...result, error: result.failed
+    ? `The push service rejected this device’s test${result.rejectedStatusCodes.length ? ` (HTTP ${result.rejectedStatusCodes.join(", ")})` : ""}. Check notification permission and enable alerts again.`
+    : "No active subscription was found for this device. Enable alerts again." }, result.failed ? 502 : 404);
   return c.json({ ok: true, ...result });
 });
 
