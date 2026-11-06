@@ -2,6 +2,7 @@ import { pgTable, uuid, text, timestamp, pgEnum, uniqueIndex } from "drizzle-orm
 import { relations } from "drizzle-orm";
 
 export const taskTypeEnum = pgEnum("task_type", ["critical", "daily"]);
+export const taskPriorityEnum = pgEnum("task_priority", ["low", "normal", "high"]);
 export const taskStatusEnum = pgEnum("task_status", ["pending", "completed"]);
 export const memberRoleEnum = pgEnum("member_role", ["owner", "member"]);
 
@@ -34,6 +35,7 @@ export const tasks = pgTable("tasks", {
   title: text("title").notNull(),
   note: text("note"),
   type: taskTypeEnum("type").notNull().default("daily"),
+  priority: taskPriorityEnum("priority").notNull().default("normal"),
   dueDate: timestamp("due_date", { withTimezone: true }),
   assignedTo: uuid("assigned_to")
     .notNull()
@@ -44,6 +46,15 @@ export const tasks = pgTable("tasks", {
   status: taskStatusEnum("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const messages = pgTable("messages", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  spaceId: uuid("space_id").notNull().references(() => spaces.id, { onDelete: "cascade" }),
+  senderId: uuid("sender_id").notNull().references(() => members.id, { onDelete: "cascade" }),
+  recipientId: uuid("recipient_id").notNull().references(() => members.id, { onDelete: "cascade" }),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const pushSubscriptions = pgTable("push_subscriptions", {
@@ -73,6 +84,7 @@ export const criticalAlertDeliveries = pgTable("critical_alert_deliveries", {
 export const spacesRelations = relations(spaces, ({ many }) => ({
   members: many(members),
   tasks: many(tasks),
+  messages: many(messages),
   pushSubscriptions: many(pushSubscriptions),
 }));
 
@@ -83,6 +95,8 @@ export const membersRelations = relations(members, ({ one, many }) => ({
   }),
   assignedTasks: many(tasks, { relationName: "assignedTasks" }),
   createdTasks: many(tasks, { relationName: "createdTasks" }),
+  sentMessages: many(messages, { relationName: "sentMessages" }),
+  receivedMessages: many(messages, { relationName: "receivedMessages" }),
   pushSubscriptions: many(pushSubscriptions),
 }));
 
@@ -101,6 +115,12 @@ export const tasksRelations = relations(tasks, ({ one }) => ({
     references: [members.id],
     relationName: "createdTasks",
   }),
+}));
+
+export const messagesRelations = relations(messages, ({ one }) => ({
+  space: one(spaces, { fields: [messages.spaceId], references: [spaces.id] }),
+  sender: one(members, { fields: [messages.senderId], references: [members.id], relationName: "sentMessages" }),
+  recipient: one(members, { fields: [messages.recipientId], references: [members.id], relationName: "receivedMessages" }),
 }));
 
 export const criticalAlertDeliveriesRelations = relations(criticalAlertDeliveries, ({ one }) => ({

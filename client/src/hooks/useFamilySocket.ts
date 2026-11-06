@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { WsMessage, Task, Member, Space } from "@todo-app/shared";
+import type { WsMessage, Task, Member, Message, Space } from "@todo-app/shared";
 
 export interface AppStateData {
   space: Space | null;
   members: Member[];
   tasks: Task[];
+  messages: Message[];
 }
 
 export interface UseFamilySocketOptions {
@@ -13,6 +14,7 @@ export interface UseFamilySocketOptions {
   passcode?: string | null;
   onTaskCreated?: (task: Task) => void;
   onTaskUpdated?: (task: Task) => void;
+  onMessageCreated?: (message: Message) => void;
 }
 
 export function useFamilySocket(options?: UseFamilySocketOptions) {
@@ -135,6 +137,12 @@ export function useFamilySocket(options?: UseFamilySocketOptions) {
                 members: [...prev.members, msg.payload],
               };
             });
+          } else if (msg.type === "message:created") {
+            queryClient.setQueryData<AppStateData>(stateQueryKey, (prev) => {
+              if (!prev || (prev.messages || []).some((message) => message.id === msg.payload.id)) return prev;
+              return { ...prev, messages: [...(prev.messages || []), msg.payload] };
+            });
+            optionsRef.current?.onMessageCreated?.(msg.payload);
           } else if (msg.type === "sync:state") {
             queryClient.setQueryData<AppStateData>(stateQueryKey, msg.payload);
           }

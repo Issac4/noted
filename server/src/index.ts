@@ -5,12 +5,12 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createNodeWebSocket } from "@hono/node-ws";
 import type { WSContext } from "hono/ws";
-import { eq, asc, desc } from "drizzle-orm";
+import { eq, asc, desc, and, inArray } from "drizzle-orm";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { db } from "./db/index.js";
-import { spaces, members, tasks, pushSubscriptions } from "./db/schema.js";
+import { spaces, members, tasks, messages, pushSubscriptions } from "./db/schema.js";
 import { runMigrations } from "./db/migrate.js";
 import { ensureDefaultSeed } from "./db/seed.js";
 import {
@@ -20,11 +20,13 @@ import {
 } from "./push.js";
 import type {
   Task,
+  Message,
   Member,
   Space,
   CreateTaskPayload,
   UpdateTaskPayload,
   SetupPayload,
+  CreateMessagePayload,
   AuthStatusResponse,
   PushSubscribePayload,
   WsMessage,
@@ -81,6 +83,7 @@ async function passcodeMiddleware(c: Context, next: Next) {
 app.use("/api/state", passcodeMiddleware);
 app.use("/api/tasks", passcodeMiddleware);
 app.use("/api/tasks/*", passcodeMiddleware);
+app.use("/api/messages", passcodeMiddleware);
 app.use("/api/members", passcodeMiddleware);
 app.use("/api/members/*", passcodeMiddleware);
 app.use("/api/spaces", passcodeMiddleware);
@@ -171,12 +174,24 @@ function serializeTask(row: typeof tasks.$inferSelect): Task {
     title: row.title,
     note: row.note,
     type: row.type,
+    priority: row.priority,
     dueDate: row.dueDate ? row.dueDate.toISOString() : null,
     assignedTo: row.assignedTo,
     createdBy: row.createdBy,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function serializeMessage(row: typeof messages.$inferSelect): Message {
+  return {
+    id: row.id,
+    spaceId: row.spaceId,
+    senderId: row.senderId,
+    recipientId: row.recipientId,
+    body: row.body,
+    createdAt: row.createdAt.toISOString(),
   };
 }
 
@@ -258,6 +273,7 @@ app.get("/api/state", async (c) => {
       space: null,
       members: [],
       tasks: [],
+      messages: [],
     });
   }
 
@@ -273,10 +289,17 @@ app.get("/api/state", async (c) => {
     .where(eq(tasks.spaceId, space.id))
     .orderBy(desc(tasks.createdAt));
 
+  const spaceMessages = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.spaceId, space.id))
+    .orderBy(asc(messages.createdAt));
+
   return c.json({
     space: serializeSpace(space, effectivePasscode),
     members: spaceMembers.map(serializeMember),
     tasks: spaceTasks.map(serializeTask),
+    messages: spaceMessages.map(serializeMessage),
   });
 });
 
@@ -333,6 +356,7 @@ app.post("/api/setup", async (c) => {
     space: serializeSpace(createdSpace, finalEffectivePasscode),
     members: createdMembers.map(serializeMember),
     tasks: [] as Task[],
+    messages: [] as Message[],
   };
 
   broadcast({ type: "sync:state", payload: statePayload });
@@ -379,6 +403,45 @@ app.post("/api/members", async (c) => {
   return c.json(serialized, 201);
 });
 
+// Short notes in a member conversation are stored separately from actionable tasks.
+app.post("/api/messages", async (c) => {
+  const body = await c.req.json<CreateMessagePayload>();
+  const text = body.body?.trim();
+  if (!text || text.length > 2000) {
+    return c.json({ error: "Message must be between 1 and 2000 characters" }, 400);
+  }
+  if (!body.senderId || !body.recipientId || body.senderId === body.recipientId) {
+    return c.json({ error: "Choose a different household member to message" }, 400);
+  }
+
+  const [space] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
+  if (!space) return c.json({ error: "No space found" }, 404);
+  const participants = await db.select({ id: members.id, name: members.name }).from(members).where(and(
+    eq(members.spaceId, space.id),
+    inArray(members.id, [body.senderId, body.recipientId])
+  ));
+  if (participants.length !== 2) {
+    return c.json({ error: "Both people must belong to this space" }, 400);
+  }
+
+  const [created] = await db.insert(messages).values({
+    spaceId: space.id,
+    senderId: body.senderId,
+    recipientId: body.recipientId,
+    body: text,
+  }).returning();
+  const serialized = serializeMessage(created);
+  broadcast({ type: "message:created", payload: serialized });
+  const senderName = participants.find((member) => member.id === body.senderId)?.name || "Someone";
+  sendPushNotification(space.id, {
+    title: `💬 ${senderName} sent a message`,
+    body: text,
+    tag: `message-${created.id}`,
+    url: "/",
+  }, body.recipientId).catch((error) => console.error("Failed to send message notification:", error));
+  return c.json(serialized, 201);
+});
+
 // Tasks CRUD
 app.get("/api/tasks", async (c) => {
   const rows = await db.select().from(tasks).orderBy(desc(tasks.createdAt));
@@ -402,6 +465,8 @@ app.post("/api/tasks", async (c) => {
   }
 
   const taskType = body.type || "daily";
+  const priority = body.priority || "normal";
+  if (!["low", "normal", "high"].includes(priority)) return c.json({ error: "Choose a valid task priority" }, 400);
   let parsedDueDate: Date | null = null;
   if (body.dueDate) {
     parsedDueDate = new Date(body.dueDate);
@@ -420,6 +485,7 @@ app.post("/api/tasks", async (c) => {
       title: body.title.trim(),
       note: body.note?.trim() || null,
       type: taskType,
+      priority,
       dueDate: parsedDueDate,
       assignedTo: body.assignedTo,
       createdBy: body.createdBy,
@@ -523,7 +589,7 @@ app.post("/api/push/test", async (c) => {
     space.id,
     {
       title: `🔔 Noted Alerts Active (${member?.name || "Device"})`,
-      body: "You'll only be buzzed for Critical Hard Deadlines and Proxy Notes from your household.",
+      body: "You'll get alerts for messages, tasks from others, and critical deadlines.",
       tag: "noted-test-ping",
       url: "/",
     },
@@ -549,6 +615,9 @@ app.patch("/api/tasks/:id", async (c) => {
   if ((body.type ?? existing.type) === "critical" && !nextDueDate) {
     return c.json({ error: "Critical tasks need a real deadline date" }, 400);
   }
+  if (body.priority !== undefined && !["low", "normal", "high"].includes(body.priority)) {
+    return c.json({ error: "Choose a valid task priority" }, 400);
+  }
 
   const updateData: Record<string, unknown> = {
     updatedAt: new Date(),
@@ -557,6 +626,7 @@ app.patch("/api/tasks/:id", async (c) => {
   if (body.title !== undefined) updateData.title = body.title.trim();
   if (body.note !== undefined) updateData.note = body.note ? body.note.trim() : null;
   if (body.type !== undefined) updateData.type = body.type;
+  if (body.priority !== undefined) updateData.priority = body.priority;
   if (body.dueDate !== undefined) {
     updateData.dueDate = nextDueDate;
   }

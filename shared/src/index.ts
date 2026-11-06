@@ -1,4 +1,5 @@
 export type TaskType = "critical" | "daily";
+export type TaskPriority = "low" | "normal" | "high";
 export type TaskStatus = "pending" | "completed";
 export type MemberRole = "owner" | "member";
 
@@ -25,6 +26,7 @@ export interface Task {
   title: string;
   note: string | null;
   type: TaskType;
+  priority: TaskPriority;
   dueDate: string | null;
   assignedTo: string;
   createdBy: string;
@@ -33,11 +35,27 @@ export interface Task {
   updatedAt: string;
 }
 
+export interface Message {
+  id: string;
+  spaceId: string;
+  senderId: string;
+  recipientId: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface CreateMessagePayload {
+  senderId: string;
+  recipientId: string;
+  body: string;
+}
+
 export interface CreateTaskPayload {
   spaceId?: string;
   title: string;
   note?: string | null;
   type?: TaskType;
+  priority?: TaskPriority;
   dueDate?: string | null;
   assignedTo: string;
   createdBy: string;
@@ -47,6 +65,7 @@ export interface UpdateTaskPayload {
   title?: string;
   note?: string | null;
   type?: TaskType;
+  priority?: TaskPriority;
   dueDate?: string | null;
   assignedTo?: string;
   status?: TaskStatus;
@@ -88,4 +107,5 @@ export type WsMessage =
   | { type: "task:updated"; payload: Task }
   | { type: "task:deleted"; payload: { id: string; spaceId: string } }
   | { type: "member:created"; payload: Member }
-  | { type: "sync:state"; payload: { space: Space; members: Member[]; tasks: Task[] } };
+  | { type: "message:created"; payload: Message }
+  | { type: "sync:state"; payload: { space: Space; members: Member[]; tasks: Task[]; messages: Message[] } };
