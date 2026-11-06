@@ -2,11 +2,27 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+
+function sourceFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const file = path.join(directory, entry.name);
+    return entry.isDirectory() ? sourceFiles(file) : [file];
+  });
+}
+// A new worker URL avoids a CDN reusing an older worker on fresh installs.
+const workerRevision = createHash("sha256");
+for (const file of [...sourceFiles(path.resolve(__dirname, "src")), path.resolve(__dirname, "public/sw-push.js"), path.resolve(__dirname, "index.html"), path.resolve(__dirname, "vite.config.ts")].sort()) {
+  workerRevision.update(path.relative(__dirname, file)).update(readFileSync(file));
+}
+const workerVersion = workerRevision.digest("hex").slice(0, 12);
 
 export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      filename: `sw-${workerVersion}.js`,
       registerType: "autoUpdate",
       includeAssets: [
         "icon.svg",
@@ -47,7 +63,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        importScripts: ["/sw-push.js"],
+        importScripts: [`/sw-push.js?v=${workerVersion}`],
         globPatterns: ["**/*.{js,css,html,svg,png,ico,woff2}"],
         cleanupOutdatedCaches: true,
         clientsClaim: true,

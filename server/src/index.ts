@@ -679,6 +679,20 @@ const clientDistCandidates = [
 const clientDistPath = clientDistCandidates.find((p) => fs.existsSync(p));
 if (clientDistPath) {
   const relativeRoot = path.relative(process.cwd(), clientDistPath) || ".";
+  app.use("/*", async (c, next) => {
+    const resource = c.req.path;
+    if (resource === "/" || resource === "/index.html" || resource === "/manifest.webmanifest" || /^\/sw(?:-[a-z0-9]+)?\.js$/.test(resource)) {
+      c.header("Cache-Control", "no-store, max-age=0");
+      c.header("CDN-Cache-Control", "no-store");
+    }
+    await next();
+  });
+  // Existing installations still request /sw.js. Keep that update path alive.
+  const currentWorker = fs.readdirSync(clientDistPath).find(file => /^sw-[a-f0-9]+\.js$/.test(file));
+  if (currentWorker) app.get("/sw.js", (c) => {
+    c.header("Content-Type", "text/javascript; charset=utf-8");
+    return c.body(fs.readFileSync(path.join(clientDistPath, currentWorker), "utf8"));
+  });
   app.use("/*", serveStatic({ root: relativeRoot }));
   app.get("*", async (c) => {
     const indexPath = path.join(clientDistPath, "index.html");
