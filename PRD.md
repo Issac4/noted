@@ -1,5 +1,5 @@
 # 📋 Noted: Product Requirements & Architecture Specification
-**A people-first task and conversation space for households and groups**
+**A Candy Calendar dashboard for households and groups**
 
 > **Open-Source Positioning**: Designed for solo individuals, families, roommates, and groups of friends. Profiles identify the person using a device but are not separate authenticated accounts; conversations are visible to anyone with access to the space.
 
@@ -20,9 +20,9 @@
 ### 1.2 The Five Core Principles
 1. **⚡ Zero Administrative Overhead**:
    * *Capture friction must approach zero. The tool serves action—managing the tool must never become a chore itself.*
-   * No mandatory tagging, project nesting, or priority dropdowns. Type and hit Enter.
+   * No mandatory tagging or project nesting. Tasks default to Normal priority; optional High / Normal / Low controls are independent of the deadline.
 2. **🌱 Guilt-Free Rollover**:
-   * Soft tasks feature no overdue badges or red penalties. Incomplete tasks quietly and smoothly roll over into tomorrow, respecting human energy fluctuations.
+   * Undated tasks stay visible without artificial overdue dates. Explicitly dated tasks show their deadline, including an overdue indicator when it has passed.
 3. **🔕 High Signal-to-Noise Ratio**:
    * Push notifications are for direct messages, tasks someone added for you, and critical deadlines. Routine completion and rollover remain quiet.
 4. **👥 Mutual Visibility without Micromanagement**:
@@ -36,19 +36,21 @@
 
 ### Module 1: 🚨 Critical Deadlines
 * **Purpose**: Dedicated strictly to high-consequence obligations with immutable cutoff dates (e.g., tax filings, property tax installments, utility bills, passport/license renewals, insurance expirations).
-* **UI Representation**: Pinned top card displaying a prominent **"Days Left" countdown badge** (e.g., `⚠️ 3 Days Left: Property Tax`).
+* **UI Representation**: Priority and deadline are separate. High-priority tasks stay at the top even without a deadline. Critical alert tasks retain their explicit deadline and alert schedule.
 * **Alert Strategy**: Strict, low-frequency alerts triggered only at **D-3, D-1, and 9:00 AM on the due date**.
 
-### Module 2: ☀️ My Day and People
-* **My Day** shows the current device profile's deadlines, current tasks, upcoming tasks, and completed work.
-* **People list** shows every other member. Selecting a person opens a conversation-style feed of messages and tasks on that person's list.
-* A task shows who it is for and which device profile created it. The member list can grow after setup.
-* Tasks can hold an optional contextual note (such as a dimension, dosage, or phone number).
+### Module 2: ☀️ Candy Calendar Dashboard
+* The approved #05 Candy Calendar layout has a full-page pastel dashboard on the left and the people list and task composer on the right. Dark mode uses navy surfaces with cyan and magenta accents.
+* **My focus** shows the active device profile's tasks; **Complete Action · Everyone** includes the entire board and labels task owners.
+* A real Monday–Sunday week strip shows due counts. Selecting a day filters dated tasks; clearing the filter restores important undated work. Previous/next week controls use local calendar dates.
+* Active tasks appear once in **Priority tasks**, **Due soon**, or **Whenever**. Completed tasks remain available in a collapsed section with a reopen action.
+* Tasks support completion, deletion, note editing, priority changes, and deadline changes. Selecting a person sets the composer recipient and keeps the dashboard visible.
 
-### Module 3: 💬 Conversation Composer
-* A fixed composer has explicit **Task** and **Message** choices. Messages are conversational text; tasks have a completion control and optional date, note, and deadline status.
-* Natural language parsing recognizes phrases such as `tomorrow`, `Nov 15`, and `!critical`. A critical task must have a real date.
-* The selected person is the task recipient. In My Day, a new task is for the current device profile.
+### Module 3: ✎ Task Composer
+* The right-side composer has a recipient selector including **Me**, High / Normal / Low priority, an optional deadline, and an optional critical deadline alert setting.
+* Natural language parsing recognizes phrases such as `tomorrow`, `Nov 15`, and `!critical`. High priority works without a date; critical alerts require a date.
+* Sending uses the existing API and WebSocket synchronization. Failed requests preserve the draft and show an error. Separate drafts are maintained per author, recipient, and send type.
+* A secondary Message option is available for other members. Recent messages are collapsed below the composer rather than replacing the task dashboard.
 
 ---
 
@@ -56,8 +58,8 @@
 
 | Platform | Layout | Interaction |
 | :--- | :--- | :--- |
-| **Mobile PWA** | Horizontally scrollable people list above one task or conversation view. | Bottom composer, completion haptics, reduced-motion support, dark and light themes. |
-| **Desktop Web** | People list beside a focused task or conversation view. | `C` focuses the composer, `Enter` sends, `Shift Enter` adds a line. Original 1990s anime and arcade-inspired styling. |
+| **Mobile PWA** | Dashboard, people, and composer stack in a single column. | New task navigation and the C shortcut reach the composer; all header controls remain available. |
+| **Desktop Web** | Calendar/task dashboard on the left; people and composer on the right. | C focuses the composer. The Send button submits; Enter in task text adds a new line. Candy Calendar styling with light and neon dark themes. |
 
 ---
 
@@ -84,6 +86,7 @@
     │     ├── title: string
     │     ├── note: text? (optional contextual note/dimensions)
     │     ├── type: "critical" | "daily"
+    │     ├── priority: "high" | "normal" | "low"
     │     ├── due_date: timestamp? (required for critical tasks)
     │     ├── assigned_to: uuid (foreign key -> members.id)
     │     ├── created_by: uuid (foreign key -> members.id)
