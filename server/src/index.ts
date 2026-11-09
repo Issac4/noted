@@ -14,6 +14,7 @@ import { spaces, members, tasks, messages, pushSubscriptions } from "./db/schema
 import { runMigrations } from "./db/migrate.js";
 import { serviceWorkerMiddleware } from "./serviceWorker.js";
 import { pushPreparationFailure } from "./pushFailure.js";
+import { pushDeliveryFailure } from "./pushDelivery.js";
 import { randomUUID } from "node:crypto";
 import { ensureDefaultSeed } from "./db/seed.js";
 import {
@@ -606,14 +607,14 @@ app.post("/api/push/test", async (c) => {
       body.endpoint
     );
 
-    if (result.sent === 0) return c.json({ ok: false, ...result, error: result.failed
-      ? `The push service rejected this device’s test${result.rejectedStatusCodes.length ? ` (HTTP ${result.rejectedStatusCodes.join(", ")})` : ""}. Check notification permission and enable alerts again.`
-      : "No active subscription was found for this device. Enable alerts again." }, result.failed ? 502 : 404);
+    // This endpoint reports a diagnostic outcome. An unsuccessful push is ok:false,
+    // not a gateway failure that a proxy may replace with an HTML error page.
+    if (result.sent === 0) return c.json({ ok: false, ...result, error: pushDeliveryFailure(result), requestId });
     return c.json({ ok: true, ...result });
   } catch (error) {
     const failure = pushPreparationFailure(error);
     console.error("Push test preparation failed", { requestId, code: failure.code, errorName: error instanceof Error ? error.name : "UnknownError" });
-    return c.json({ ok: false, error: failure.message, code: failure.code, requestId }, 500);
+    return c.json({ ok: false, error: failure.message, code: failure.code, requestId });
   }
 });
 

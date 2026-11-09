@@ -142,7 +142,7 @@ export async function sendTestPushNotification(
     if (!subscription) return { ok: false, error: "This device is not subscribed. Enable alerts again." };
     const res = await fetch("/api/push/test", {
       method: "POST",
-      headers,
+      headers: { ...headers, Accept: "application/json" },
       body: JSON.stringify({ memberId, endpoint: subscription.endpoint }),
     });
     const result = await res.json().catch(() => null) as { ok?: boolean; sent?: number; failed?: number; expired?: number; rejectedStatusCodes?: number[]; error?: string } | null;
@@ -157,10 +157,8 @@ export async function sendTestPushNotification(
       await subscription.unsubscribe();
       return { ok: false, error: "This device’s notification subscription expired. Tap Enable alerts to create a fresh one." };
     }
-    if (result?.rejectedStatusCodes?.some(code => code === 401 || code === 403)) {
-      await subscription.unsubscribe();
-      return { ok: false, error: "The push service rejected this device’s authorization. Tap Enable alerts to renew its subscription, then test again." };
-    }
+    // A provider authorization error can be server-side VAPID configuration.
+    // Do not discard a valid device subscription in response to it.
     if (!res.ok || result.ok !== true || !Number.isInteger(result.sent) || (result.sent ?? 0) < 1 || result.failed !== 0) {
       return { ok: false, error: result.error
         ? `${result.error}${reference}`

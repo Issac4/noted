@@ -31,6 +31,9 @@ test("a test targets the current device and never treats HTTP 200 alone as succe
     assert.equal((await sendTestPushNotification("member", {})).ok, false);
     response = { ok: true, sent: 0, failed: 1 };
     assert.equal((await sendTestPushNotification("member", {})).ok, false);
+    response = { ok: false, sent: 0, failed: 1, rejectedStatusCodes: [403], failureCodes: ["BadJwtToken"], error: "Apple rejected server signing" };
+    assert.match((await sendTestPushNotification("member", {})).error!, /server signing/);
+    assert.equal(unsubscribed, false, "server signing errors must not discard the phone subscription");
     response = { ok: false, sent: 1, failed: 0 };
     assert.equal((await sendTestPushNotification("member", {})).ok, false);
     response = { ok: true, sent: 1, failed: 0 };

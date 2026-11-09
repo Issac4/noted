@@ -3,6 +3,7 @@ import { eq, and, isNull, lt, or } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { spaces, pushSubscriptions, tasks, criticalAlertDeliveries } from "./db/schema.js";
 import { criticalAlertForToday } from "./alertSchedule.js";
+import { PUSH_TIMEOUT_MS, pushFailureCode, resolveVapidSubject } from "./pushDelivery.js";
 
 export interface PushNotificationPayload {
   title: string;
@@ -54,11 +55,9 @@ export async function sendPushNotification(
   payload: PushNotificationPayload,
   targetMemberId?: string,
   targetEndpoint?: string
-): Promise<{ sent: number; failed: number; expired: number; rejectedStatusCodes: number[] }> {
+): Promise<{ sent: number; failed: number; expired: number; rejectedStatusCodes: number[]; failureCodes: string[] }> {
   const keys = await ensureSpaceVapidKeys(spaceId);
-  const contactEmail = process.env.VAPID_SUBJECT || "mailto:admin@noted.local";
-
-  webpush.setVapidDetails(contactEmail, keys.publicKey, keys.privateKey);
+  const subject = resolveVapidSubject(process.env.VAPID_SUBJECT);
 
   const memberSubs = targetMemberId
     ? await db
@@ -80,6 +79,7 @@ export async function sendPushNotification(
   let failed = 0;
   let expired = 0;
   const rejectedStatusCodes = new Set<number>();
+  const failureCodes = new Set<string>();
 
   const message = JSON.stringify({
     title: payload.title,
@@ -99,11 +99,14 @@ export async function sendPushNotification(
               auth: sub.auth,
             },
           },
-          message
+          message,
+          { timeout: PUSH_TIMEOUT_MS, vapidDetails: { subject, publicKey: keys.publicKey, privateKey: keys.privateKey } }
         );
         sent += 1;
       } catch (err: any) {
         failed += 1;
+        const failureCode = pushFailureCode(err);
+        if (failureCode) failureCodes.add(failureCode);
         if (typeof err?.statusCode === "number") rejectedStatusCodes.add(err.statusCode);
         // Clean up expired or unsubscribed endpoints
         if (err?.statusCode === 404 || err?.statusCode === 410) {
@@ -116,7 +119,7 @@ export async function sendPushNotification(
     })
   );
 
-  return { sent, failed, expired, rejectedStatusCodes: [...rejectedStatusCodes] };
+  return { sent, failed, expired, rejectedStatusCodes: [...rejectedStatusCodes], failureCodes: [...failureCodes] };
 }
 
 /**
