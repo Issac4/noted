@@ -37,6 +37,14 @@ test("a test targets the current device and never treats HTTP 200 alone as succe
     assert.equal((await sendTestPushNotification("member", {})).ok, true);
     status = 502;
     assert.equal((await sendTestPushNotification("member", {})).ok, false);
+    response = { ok: true, sent: "one", failed: 0 };
+    status = 200;
+    assert.equal((await sendTestPushNotification("member", {})).ok, false);
+    response = null;
+    status = 500;
+    assert.match((await sendTestPushNotification("member", {})).error!, /HTTP 500/);
+    status = 200;
+    assert.match((await sendTestPushNotification("member", {})).error!, /non-JSON/);
     response = { ok: false, sent: 0, failed: 1, expired: 1 };
     assert.match((await sendTestPushNotification("member", {})).error!, /expired/);
     assert.equal(unsubscribed, true);

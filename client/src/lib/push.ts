@@ -146,6 +146,13 @@ export async function sendTestPushNotification(
       body: JSON.stringify({ memberId, endpoint: subscription.endpoint }),
     });
     const result = await res.json().catch(() => null) as { ok?: boolean; sent?: number; failed?: number; expired?: number; rejectedStatusCodes?: number[]; error?: string } | null;
+    const requestId = res.headers.get("X-Noted-Request-ID");
+    const reference = requestId ? ` Reference: ${requestId}.` : "";
+    if (!result) {
+      return { ok: false, error: res.status >= 500
+        ? `The notification server returned an error (HTTP ${res.status}) instead of a test result. This needs a server-side check; reinstalling will not fix it.${reference}`
+        : `The notification request received an unexpected non-JSON response (HTTP ${res.status}). A proxy or sign-in page may be intercepting it.${reference}` };
+    }
     if (result?.expired) {
       await subscription.unsubscribe();
       return { ok: false, error: "This device’s notification subscription expired. Tap Enable alerts to create a fresh one." };
@@ -154,8 +161,10 @@ export async function sendTestPushNotification(
       await subscription.unsubscribe();
       return { ok: false, error: "The push service rejected this device’s authorization. Tap Enable alerts to renew its subscription, then test again." };
     }
-    if (!res.ok || result?.ok !== true || !result.sent || result.failed) {
-      return { ok: false, error: result?.error || "The push service did not accept the test. Enable alerts again and retry." };
+    if (!res.ok || result.ok !== true || !Number.isInteger(result.sent) || (result.sent ?? 0) < 1 || result.failed !== 0) {
+      return { ok: false, error: result.error
+        ? `${result.error}${reference}`
+        : `The notification API did not confirm any successful push (HTTP ${res.status}). The server response needs checking.${reference}` };
     }
     return { ok: true };
   } catch (error) {
