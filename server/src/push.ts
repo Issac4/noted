@@ -2,7 +2,7 @@ import webpush from "web-push";
 import { eq, and, isNull, lt, or } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { spaces, pushSubscriptions, tasks, criticalAlertDeliveries } from "./db/schema.js";
-import { criticalAlertForToday } from "./alertSchedule.js";
+import { criticalAlertForToday, criticalDeadlineLabel } from "./alertSchedule.js";
 import { PUSH_TIMEOUT_MS, pushFailureCode, resolveVapidSubject } from "./pushDelivery.js";
 
 export interface PushNotificationPayload {
@@ -122,10 +122,7 @@ export async function sendPushNotification(
   return { sent, failed, expired, rejectedStatusCodes: [...rejectedStatusCodes], failureCodes: [...failureCodes] };
 }
 
-/**
- * Checks pending critical hard deadlines and fires D-3, D-1, and Due-Date (D-0) alerts after 9:00 AM
- * (per PRD Section 2 Module 1 & Section 4 Strict Notification Protocol).
- */
+/** Send one daily critical reminder after 9 AM, including overdue tasks, until completion. */
 export async function evaluateCriticalDeadlineAlerts() {
   const now = new Date();
   const timeZone = process.env.ALERT_TIME_ZONE || "America/Toronto";
@@ -160,12 +157,7 @@ export async function evaluateCriticalDeadlineAlerts() {
         .returning();
       if (!claimed) continue;
 
-      const whenLabel =
-        daysLeft === 0
-          ? "due today"
-          : daysLeft === 1
-          ? "due tomorrow (1 day left)"
-          : "due in 3 days";
+      const whenLabel = criticalDeadlineLabel(daysLeft);
 
       try {
         const result = await sendPushNotification(
@@ -178,9 +170,11 @@ export async function evaluateCriticalDeadlineAlerts() {
           },
           task.assignedTo
         );
-        if (result.failed > 0) {
-          throw new Error(`${result.failed} push delivery attempt(s) failed`);
+        if (result.sent === 0) {
+          throw new Error("Daily critical reminder had no confirmed push acceptance");
         }
+        // A failed second device must not cause repeated reminders on a working device.
+        if (result.failed > 0) console.warn(`Critical reminder partially accepted for task ${task.id}`);
         await db.update(criticalAlertDeliveries)
           .set({ sentAt: new Date(), claimedAt: null })
           .where(eq(criticalAlertDeliveries.id, claimed.id));

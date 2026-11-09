@@ -1,7 +1,7 @@
 # 📋 Noted: Product Requirements & Architecture Specification
 **A Candy Calendar dashboard for households and groups**
 
-> **Open-Source Positioning**: Designed for solo individuals, families, roommates, and groups of friends. Profiles identify the person using a device but are not separate authenticated accounts; conversations are visible to anyone with access to the space.
+> **Open-Source Positioning**: Designed for solo individuals, families, roommates, and groups of friends. Profiles identify the person using a device but are not separate authenticated accounts; tasks are visible to anyone with access to the space.
 
 ---
 
@@ -24,11 +24,11 @@
 2. **🌱 Guilt-Free Rollover**:
    * Undated tasks stay visible without artificial overdue dates. Explicitly dated tasks show their deadline, including an overdue indicator when it has passed.
 3. **🔕 High Signal-to-Noise Ratio**:
-   * Push notifications are for direct messages, tasks someone added for you, and critical deadlines. Routine completion and rollover remain quiet.
+   * Push notifications are for tasks someone added for you and daily critical reminders. Routine completion and rollover remain quiet.
 4. **👥 Mutual Visibility without Micromanagement**:
    * Each member maintains their own focus list. Members can add a task for someone else while keeping the original sender visible.
 5. **⚡ Resilient Capture**:
-   * The PWA caches its interface for quick loading. Sending a task or message requires a connection; failed sends keep the draft so the user can retry.
+   * The PWA caches its interface for quick loading. Sending a task requires a connection; failed sends keep the draft so the user can retry.
 
 ---
 
@@ -37,20 +37,20 @@
 ### Module 1: 🚨 Critical Deadlines
 * **Purpose**: Dedicated strictly to high-consequence obligations with immutable cutoff dates (e.g., tax filings, property tax installments, utility bills, passport/license renewals, insurance expirations).
 * **UI Representation**: Priority and deadline are separate. High-priority tasks stay at the top even without a deadline. Critical alert tasks retain their explicit deadline and alert schedule.
-* **Alert Strategy**: Strict, low-frequency alerts triggered only at **D-3, D-1, and 9:00 AM on the due date**.
+* **Alert Strategy**: **Daily at 9:00 AM Toronto time until completed, including overdue tasks**. The server checks every minute and catches up after a restart. Daylight saving time is automatic. A persistent task/day record prevents repeating an accepted reminder; failed delivery with no accepted device is retried. Push acceptance does not guarantee immediate device display.
 
 ### Module 2: ☀️ Candy Calendar Dashboard
-* The approved #05 Candy Calendar layout has a full-page pastel dashboard on the left and the people list and task composer on the right. Dark mode uses navy surfaces with cyan and magenta accents.
+* The approved #05 Candy Calendar layout has a full-width pastel dashboard and a task composer fixed to the bottom of the device screen. Dark mode uses navy surfaces with cyan and magenta accents.
 * **My focus** shows the active device profile's tasks; **Complete Action · Everyone** includes the entire board and labels task owners.
 * A real Monday–Sunday week strip shows due counts. Selecting a day filters dated tasks; clearing the filter restores important undated work. Previous/next week controls use local calendar dates.
-* Active tasks appear once in **Priority tasks**, **Due soon**, or **Whenever**. Completed tasks remain available in a collapsed section with a reopen action.
-* Tasks support completion, deletion, note editing, priority changes, and deadline changes. Selecting a person sets the composer recipient and keeps the dashboard visible.
+* Active tasks appear once in **Priority tasks**, **Due soon**, or **Whenever**. Each group has a distinct rose, blue, or green color. Tasks with the earliest dated day within each group are bold and tinted in that group’s color, including ties; undated tasks are not highlighted as due. Completed tasks remain available in collapsed history with a completion date/time and a reopen action. Historical tasks without a recorded completion time say “time not recorded”; timestamps are never guessed from edit times.
+* Tasks support completion, deletion, note editing, priority changes, and deadline changes. The composer recipient selector includes everyone, including the active user. Add person remains in the header; there is no duplicate people panel.
 
 ### Module 3: ✎ Task Composer
-* The right-side composer has a recipient selector including **Me**, High / Normal / Low priority, an optional deadline, and an optional critical deadline alert setting.
+* The screen-bottom composer has a recipient selector including **Me**, High / Normal / Low priority, an optional deadline, and an optional critical deadline alert setting.
 * Natural language parsing recognizes phrases such as `tomorrow`, `Nov 15`, and `!critical`. High priority works without a date; critical alerts require a date.
-* Sending uses the existing API and WebSocket synchronization. Failed requests preserve the draft and show an error. Separate drafts are maintained per author, recipient, and send type.
-* A secondary Message option is available for other members. Recent messages are collapsed below the composer rather than replacing the task dashboard.
+* Sending uses the existing API and WebSocket synchronization. Failed requests preserve the draft and show an error. Separate text drafts are maintained per author and recipient.
+* Messaging is removed. Existing message data remains untouched; older clients receive a clear retired-feature response. The composer accounts for the mobile keyboard and safe area; content padding keeps final task rows clear of it.
 
 ---
 
@@ -58,8 +58,8 @@
 
 | Platform | Layout | Interaction |
 | :--- | :--- | :--- |
-| **Mobile PWA** | Dashboard, people, and composer stack in a single column. | New task navigation and the C shortcut reach the composer; all header controls remain available. |
-| **Desktop Web** | Calendar/task dashboard on the left; people and composer on the right. | C focuses the composer. The Send button submits; Enter in task text adds a new line. Candy Calendar styling with light and neon dark themes. |
+| **Mobile PWA** | Dashboard with a compact composer fixed at the screen bottom. | Assignment, priority, deadline and critical alerts stay available in the bottom composer; all header controls remain available. |
+| **Desktop Web** | Full-width dashboard with three task columns and a bottom composer. | C focuses the composer. Send or Enter submits; Shift+Enter adds a new line. Candy Calendar styling with light and neon dark themes. |
 
 ---
 
@@ -67,9 +67,8 @@
 
 | Event | Notification Sent? | Timing & Content |
 | :--- | :---: | :--- |
-| **🚨 Critical Hard Deadline** | **✅ YES** | D-3, D-1, and morning of due date: `⚠️ [Critical] Tax return due in 2 days` |
+| **🚨 Critical Hard Deadline** | **✅ YES** | Daily at/shortly after 9 AM Toronto, including after the deadline, until completed. Only the assignee’s subscribed devices receive reminders. |
 | **📝 Task Added for You** | **✅ YES** | Alert the recipient when another member adds a task to their list. |
-| **💬 Direct Message** | **✅ YES** | Alert the recipient when a member sends a message. |
 | **Routine Task Completed** | **❌ NO** | Updates silently via WebSocket without buzzing the partner's phone. |
 | **Routine Task Incomplete** | **❌ NO** | Strictly zero "overdue" shame notifications; items roll over automatically. |
 
@@ -91,9 +90,10 @@
     │     ├── assigned_to: uuid (foreign key -> members.id)
     │     ├── created_by: uuid (foreign key -> members.id)
     │     ├── status: "pending" | "completed"
+    │     ├── completed_at: timestamp? (cleared on reopen; legacy times unknown)
     │     ├── created_at: timestamp
     │     └── updated_at: timestamp
-    └── [Messages]
+    └── [Legacy Messages — retained, no active messaging feature]
           ├── id: uuid
           ├── space_id: uuid (foreign key)
           ├── sender_id: uuid (foreign key -> members.id)
@@ -111,7 +111,7 @@
 │ 📱 Frontend: Vite + React 19 + TypeScript + Tailwind CSS     │
 │    UI Library: shadcn/ui + Lucide Icons                     │
 ├─────────────────────────────────────────────────────────────┤
-│ • UI/UX: People list, task feeds, message threads, themes   │
+│ • UI/UX: Task dashboard, completion history, composer, themes   │
 │ • State: TanStack Query (React Query) + WebSocket updates    │
 │ • Offline: Vite PWA Plugin (Workbox), static resource cache  │
 └──────────────────────────────┬──────────────────────────────┘
@@ -140,7 +140,7 @@
   1. `db`: `postgres:16-alpine` configured with an integrated Docker healthcheck (`pg_isready`).
   2. `app`: Single container running Hono, serving both the API/WebSocket server and compiled static frontend assets. Configured with `depends_on: db: condition: service_healthy` to eliminate startup race conditions after power interruptions.
 * **Edge Routing & SSL**: Cloudflare Tunnel (`cloudflared`) routing traffic to the Tiny PC. Zero router port-forwarding required; TLS termination handled at Cloudflare's edge.
-* **CI/CD Pipeline**: GitHub Actions builds multi-platform Docker images on push to `main` ➡️ pushes to GitHub Container Registry (`ghcr.io`) ➡️ Watchtower on Tiny PC pulls clean images automatically.
+* **CI/CD Pipeline**: GitHub Actions builds Docker images on push to `main` and publishes to GitHub Container Registry (`ghcr.io`). Production updates are explicit over SSH using the existing deploy helper, which backs up the database and pulls the latest image. Watchtower is stopped.
 
 ---
 

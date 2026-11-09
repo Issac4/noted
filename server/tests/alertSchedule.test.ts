@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { criticalAlertForToday } from "../src/alertSchedule.ts";
+import { criticalAlertForToday, criticalDeadlineLabel } from "../src/alertSchedule.ts";
 
 const zone = "America/Toronto";
 
@@ -28,9 +28,17 @@ test("counts calendar days across daylight saving time", () => {
   );
 });
 
-test("only schedules three, one, and zero days before a deadline", () => {
+test("uses 9 a.m. Toronto during daylight saving time as well", () => {
+  const due = new Date("2026-07-12T13:00:00Z");
+  assert.equal(criticalAlertForToday(new Date("2026-07-10T12:59:00Z"), due, zone), null);
+  assert.deepEqual(criticalAlertForToday(new Date("2026-07-10T13:00:00Z"), due, zone), {
+    alertDate: "2026-07-10", daysLeft: 2,
+  });
+});
+
+test("schedules daily before the deadline, on the deadline, and while overdue", () => {
   const due = new Date("2026-11-07T14:00:00Z");
-  assert.equal(criticalAlertForToday(new Date("2026-11-05T14:00:00Z"), due, zone), null);
+  assert.deepEqual(criticalAlertForToday(new Date("2026-11-05T14:00:00Z"), due, zone), { alertDate: "2026-11-05", daysLeft: 2 });
   assert.deepEqual(criticalAlertForToday(new Date("2026-11-06T14:00:00Z"), due, zone), {
     alertDate: "2026-11-06",
     daysLeft: 1,
@@ -39,4 +47,14 @@ test("only schedules three, one, and zero days before a deadline", () => {
     alertDate: "2026-11-07",
     daysLeft: 0,
   });
+});
+
+test("overdue critical tasks remain eligible daily and reminders describe the actual deadline", () => {
+  const due = new Date("2026-11-07T14:00:00Z");
+  assert.equal(criticalAlertForToday(new Date("2026-11-09T13:59:00Z"), due, zone), null);
+  assert.deepEqual(criticalAlertForToday(new Date("2026-11-09T14:00:00Z"), due, zone), { alertDate: "2026-11-09", daysLeft: -2 });
+  assert.equal(criticalDeadlineLabel(-2), "overdue by 2 days");
+  assert.equal(criticalDeadlineLabel(-1), "overdue by 1 day");
+  assert.equal(criticalDeadlineLabel(0), "due today");
+  assert.equal(criticalDeadlineLabel(8), "due in 8 days");
 });

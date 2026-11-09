@@ -44,6 +44,7 @@ export const tasks = pgTable("tasks", {
     .notNull()
     .references(() => members.id, { onDelete: "cascade" }),
   status: taskStatusEnum("status").notNull().default("pending"),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

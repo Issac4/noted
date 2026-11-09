@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AuthStatusResponse, CreateMessagePayload, CreateTaskPayload, Member, Message, SetupPayload, Task, UpdateTaskPayload } from "@todo-app/shared";
+import type { AuthStatusResponse, CreateTaskPayload, Member, SetupPayload, Task, UpdateTaskPayload } from "@todo-app/shared";
 import { useFamilySocket, type AppStateData } from "@/hooks/useFamilySocket";
 import { SetupWizard } from "@/components/SetupWizard";
 import { PasscodeLockScreen } from "@/components/PasscodeLockScreen";
@@ -106,13 +106,7 @@ export default function App() {
         window.setTimeout(() => setBanner(null), 5000);
       }
     },
-    onMessageCreated: (message) => {
-      if (activeActorId && message.recipientId === activeActorId) {
-        const sender = data?.members.find((member) => member.id === message.senderId)?.name || "Someone";
-        setBanner(`💬 New message from ${sender}`);
-        window.setTimeout(() => setBanner(null), 5000);
-      }
-    },
+
   });
 
   const setupMutation = useMutation({
@@ -145,16 +139,6 @@ export default function App() {
     onSuccess: (created) => queryClient.setQueryData<AppStateData>(stateKey, (previous) => previous && !previous.tasks.some((task) => task.id === created.id) ? { ...previous, tasks: [created, ...previous.tasks] } : previous),
   });
 
-  const createMessage = useMutation({
-    mutationFn: async (payload: CreateMessagePayload) => {
-      const response = await fetch("/api/messages", { method: "POST", headers: getAuthHeaders(), body: JSON.stringify(payload) });
-      if (response.status === 401) setIsLocked(true);
-      if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.error || "Could not send message"); }
-      return response.json() as Promise<Message>;
-    },
-    onSuccess: (created) => queryClient.setQueryData<AppStateData>(stateKey, (previous) => previous && !(previous.messages || []).some((message) => message.id === created.id) ? { ...previous, messages: [...(previous.messages || []), created] } : previous),
-  });
-
   const createMember = useMutation({
     mutationFn: async ({ name, avatar, spaceId }: { name: string; avatar: string; spaceId: string }) => {
       const response = await fetch("/api/members", { method: "POST", headers: getAuthHeaders(), body: JSON.stringify({ name, avatar, spaceId }) });
@@ -171,7 +155,7 @@ export default function App() {
       if (!response.ok) throw new Error("Could not update task");
       return response.json() as Promise<Task>;
     },
-    onMutate: ({ id, patch }) => queryClient.setQueryData<AppStateData>(stateKey, (previous) => previous ? { ...previous, tasks: previous.tasks.map((task) => task.id === id ? { ...task, ...patch } : task) } : previous),
+    onMutate: ({ id, patch }) => queryClient.setQueryData<AppStateData>(stateKey, (previous) => previous ? { ...previous, tasks: previous.tasks.map((task) => task.id === id ? { ...task, ...patch, completedAt: patch.status === "completed" && task.status !== "completed" ? new Date().toISOString() : patch.status === "pending" ? null : task.completedAt } : task) } : previous),
     onSuccess: (updated) => queryClient.setQueryData<AppStateData>(stateKey, (previous) => previous ? { ...previous, tasks: previous.tasks.map((task) => task.id === updated.id ? updated : task) } : previous),
     onError: () => queryClient.invalidateQueries({ queryKey: stateKey }),
   });
@@ -234,7 +218,6 @@ export default function App() {
     space={data.space}
     members={data.members}
     tasks={data.tasks}
-    messages={data.messages || []}
     actor={actor || data.members[0]}
     connection={connection}
     isDarkMode={isDarkMode}
@@ -246,7 +229,6 @@ export default function App() {
     onEnableAlerts={toggleAlerts}
     onLock={() => { localStorage.removeItem(PASSCODE_KEY); localStorage.removeItem(MEMBER_KEY); setStoredPasscode(null); setActiveActorId(null); setIsLocked(true); }}
     onCreateTask={(payload) => createTask.mutateAsync(payload)}
-    onCreateMessage={(payload) => createMessage.mutateAsync(payload)}
     onUpdateTask={(id, patch) => updateTask.mutate({ id, patch })}
     onDeleteTask={(id) => deleteTask.mutate(id)}
     onAddMember={(name, avatar) => createMember.mutateAsync({ name, avatar, spaceId: data.space!.id })}

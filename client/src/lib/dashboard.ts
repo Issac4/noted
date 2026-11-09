@@ -28,3 +28,17 @@ export function dashboardGroups(tasks: Task[]) {
     later: pending.filter(t => t.priority !== "high" && !t.dueDate).sort((a, b) => Number(a.priority === "low") - Number(b.priority === "low") || deadlineOrder(a, b)),
   };
 }
+
+/** Highlight every task tied on the nearest due calendar day, without inventing dates. */
+export function nearestDueIds(tasks: Task[]): Set<string> {
+  const dated = tasks.filter(t => t.status === "pending" && t.dueDate);
+  const day = dated.map(t => dateKey(new Date(t.dueDate!))).sort()[0];
+  return new Set(day ? dated.filter(t => dateKey(new Date(t.dueDate!)) === day).map(t => t.id) : []);
+}
+
+export function completedHistory(tasks: Task[]): Task[] {
+  return tasks.filter(t => t.status === "completed").sort((a, b) =>
+    Number(!!b.completedAt) - Number(!!a.completedAt) ||
+    (b.completedAt || b.updatedAt).localeCompare(a.completedAt || a.updatedAt) || a.id.localeCompare(b.id)
+  );
+}

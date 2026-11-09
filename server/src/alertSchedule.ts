@@ -25,10 +25,16 @@ export function criticalAlertForToday(now: Date, dueDate: Date, timeZone: string
   if (today.hour < 9) return null;
 
   const daysLeft = dayNumber(calendarParts(dueDate, timeZone)) - dayNumber(today);
-  if (daysLeft !== 3 && daysLeft !== 1 && daysLeft !== 0) return null;
 
   return {
     alertDate: `${today.year}-${String(today.month).padStart(2, "0")}-${String(today.day).padStart(2, "0")}`,
     daysLeft,
   };
+}
+
+export function criticalDeadlineLabel(daysLeft: number): string {
+  if (daysLeft < 0) return `overdue by ${Math.abs(daysLeft)} day${daysLeft === -1 ? "" : "s"}`;
+  if (daysLeft === 0) return "due today";
+  if (daysLeft === 1) return "due tomorrow";
+  return `due in ${daysLeft} days`;
 }

@@ -31,6 +31,7 @@ export interface Task {
   assignedTo: string;
   createdBy: string;
   status: TaskStatus;
+  completedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

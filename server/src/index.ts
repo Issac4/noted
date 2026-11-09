@@ -5,12 +5,12 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createNodeWebSocket } from "@hono/node-ws";
 import type { WSContext } from "hono/ws";
-import { eq, asc, desc, and, inArray } from "drizzle-orm";
+import { eq, asc, desc, and, sql } from "drizzle-orm";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { db } from "./db/index.js";
-import { spaces, members, tasks, messages, pushSubscriptions } from "./db/schema.js";
+import { spaces, members, tasks, pushSubscriptions } from "./db/schema.js";
 import { runMigrations } from "./db/migrate.js";
 import { serviceWorkerMiddleware } from "./serviceWorker.js";
 import { pushPreparationFailure } from "./pushFailure.js";
@@ -24,13 +24,11 @@ import {
 } from "./push.js";
 import type {
   Task,
-  Message,
   Member,
   Space,
   CreateTaskPayload,
   UpdateTaskPayload,
   SetupPayload,
-  CreateMessagePayload,
   AuthStatusResponse,
   PushSubscribePayload,
   WsMessage,
@@ -138,12 +136,12 @@ const heartbeatTimer = setInterval(() => {
 }, HEARTBEAT_INTERVAL_MS);
 heartbeatTimer.unref();
 
-// Periodic 15-minute check for Critical Hard Deadlines (D-3, D-1, and 9:00 AM Due Date)
+// Check every minute so daily critical reminders start shortly after 9 AM.
 const criticalDeadlineTimer = setInterval(() => {
   evaluateCriticalDeadlineAlerts().catch((err) =>
     console.error("Critical deadline check error:", err)
   );
-}, 15 * 60 * 1000);
+}, 60 * 1000);
 criticalDeadlineTimer.unref();
 
 // Format DB rows to shared DTOs (never leak raw passcode)
@@ -183,19 +181,9 @@ function serializeTask(row: typeof tasks.$inferSelect): Task {
     assignedTo: row.assignedTo,
     createdBy: row.createdBy,
     status: row.status,
+    completedAt: row.completedAt?.toISOString() || null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
-  };
-}
-
-function serializeMessage(row: typeof messages.$inferSelect): Message {
-  return {
-    id: row.id,
-    spaceId: row.spaceId,
-    senderId: row.senderId,
-    recipientId: row.recipientId,
-    body: row.body,
-    createdAt: row.createdAt.toISOString(),
   };
 }
 
@@ -293,17 +281,11 @@ app.get("/api/state", async (c) => {
     .where(eq(tasks.spaceId, space.id))
     .orderBy(desc(tasks.createdAt));
 
-  const spaceMessages = await db
-    .select()
-    .from(messages)
-    .where(eq(messages.spaceId, space.id))
-    .orderBy(asc(messages.createdAt));
-
   return c.json({
     space: serializeSpace(space, effectivePasscode),
     members: spaceMembers.map(serializeMember),
     tasks: spaceTasks.map(serializeTask),
-    messages: spaceMessages.map(serializeMessage),
+    messages: [],
   });
 });
 
@@ -407,44 +389,8 @@ app.post("/api/members", async (c) => {
   return c.json(serialized, 201);
 });
 
-// Short notes in a member conversation are stored separately from actionable tasks.
-app.post("/api/messages", async (c) => {
-  const body = await c.req.json<CreateMessagePayload>();
-  const text = body.body?.trim();
-  if (!text || text.length > 2000) {
-    return c.json({ error: "Message must be between 1 and 2000 characters" }, 400);
-  }
-  if (!body.senderId || !body.recipientId || body.senderId === body.recipientId) {
-    return c.json({ error: "Choose a different household member to message" }, 400);
-  }
-
-  const [space] = await db.select().from(spaces).orderBy(asc(spaces.createdAt)).limit(1);
-  if (!space) return c.json({ error: "No space found" }, 404);
-  const participants = await db.select({ id: members.id, name: members.name }).from(members).where(and(
-    eq(members.spaceId, space.id),
-    inArray(members.id, [body.senderId, body.recipientId])
-  ));
-  if (participants.length !== 2) {
-    return c.json({ error: "Both people must belong to this space" }, 400);
-  }
-
-  const [created] = await db.insert(messages).values({
-    spaceId: space.id,
-    senderId: body.senderId,
-    recipientId: body.recipientId,
-    body: text,
-  }).returning();
-  const serialized = serializeMessage(created);
-  broadcast({ type: "message:created", payload: serialized });
-  const senderName = participants.find((member) => member.id === body.senderId)?.name || "Someone";
-  sendPushNotification(space.id, {
-    title: `💬 ${senderName} sent a message`,
-    body: text,
-    tag: `message-${created.id}`,
-    url: "/",
-  }, body.recipientId).catch((error) => console.error("Failed to send message notification:", error));
-  return c.json(serialized, 201);
-});
+// Keep a clear response for older installed clients; messaging is retired.
+app.post("/api/messages", (c) => c.json({ error: "Messaging has been removed. Assign a task instead." }, 410));
 
 // Tasks CRUD
 app.get("/api/tasks", async (c) => {
@@ -599,7 +545,7 @@ app.post("/api/push/test", async (c) => {
       space.id,
       {
         title: `🔔 Noted Alerts Active (${member?.name || "Device"})`,
-        body: "You'll get alerts for messages, tasks from others, and critical deadlines.",
+        body: "You'll get alerts for tasks assigned to you and critical deadlines.",
         tag: `noted-test-${Date.now()}`,
         url: "/",
       },
@@ -650,7 +596,13 @@ app.patch("/api/tasks/:id", async (c) => {
     updateData.dueDate = nextDueDate;
   }
   if (body.assignedTo !== undefined) updateData.assignedTo = body.assignedTo;
-  if (body.status !== undefined) updateData.status = body.status;
+  if (body.status !== undefined && !["pending", "completed"].includes(body.status)) return c.json({ error: "Choose a valid task status" }, 400);
+  if (body.status !== undefined) {
+    updateData.status = body.status;
+    updateData.completedAt = body.status === "completed"
+      ? sql`CASE WHEN ${tasks.status} <> 'completed' THEN now() ELSE ${tasks.completedAt} END`
+      : null;
+  }
 
   const [updated] = await db
     .update(tasks)
