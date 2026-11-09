@@ -107,9 +107,9 @@
 .candy-task-actions button { display: inline-flex; align-items: center; min-height: 25px; }
 .candy-task-actions button:hover { color: var(--c-pink); }
 .candy-critical { margin-right: auto; font-size: 9px; color: var(--c-chip-ink); }
-.candy-task-edit { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; border-top: 1px solid var(--c-border); padding-top: 12px; margin-top: 10px; }
+.candy-task-edit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; border-top: 1px solid var(--c-border); padding-top: 12px; margin-top: 10px; }
 .candy-task-edit form { grid-column: 1 / -1; }
-.candy-task-edit label { display: grid; gap: 6px; font-size: 10px; font-weight: 800; }
+.candy-task-edit label { display: grid; min-width: 0; gap: 6px; font-size: 10px; font-weight: 800; }
 .candy-task-edit input, .candy-task-edit select, .candy-task-edit textarea { min-width: 0; width: 100%; padding: 8px; border: 1px solid var(--c-border); border-radius: 7px; background: var(--c-input); font-size: 12px; font-weight: 400; }
 .candy-task-edit form button { margin-top: 8px; }
 .candy-task.is-complete h3 { text-decoration: line-through; color: var(--c-dim); }
@@ -117,7 +117,7 @@
 .candy-completed { border-top: 1px solid var(--c-border); margin-top: 24px; padding-top: 16px; }
 .candy-completed summary { font-size: 12px; color: var(--c-dim); cursor: pointer; padding: 4px 0 12px; }
 .candy-side { display: grid; align-content: start; gap: 20px; min-width: 0; }
-.candy-card { background: var(--c-panel); border: 2px solid var(--c-line); border-radius: 20px; box-shadow: 5px 5px 0 #2d3155; padding: 20px; scroll-margin-top: 20px; }
+.candy-card { min-width: 0; background: var(--c-panel); border: 2px solid var(--c-line); border-radius: 20px; box-shadow: 5px 5px 0 #2d3155; padding: 20px; scroll-margin-top: 20px; }
 .candy-people { display: grid; gap: 8px; max-height: 330px; overflow-y: auto; padding: 2px; }
 .candy-person { width: 100%; display: flex; align-items: center; gap: 10px; border: 1px solid #ddd6e2; background: var(--c-input); border-radius: 11px; padding: 9px; text-align: left; color: var(--c-ink); }
 .candy-person.on { background: var(--c-selected); border: 2px solid var(--c-line); padding: 8px; }
@@ -132,11 +132,24 @@
 .candy-add-form input, .candy-add-form select { width: 100%; padding: 8px; border: 1px solid var(--c-border); border-radius: 7px; background: var(--c-input); }
 .candy-secondary { border: 1px solid var(--c-line); border-radius: 8px; padding: 8px 11px; background: var(--c-input); font-size: 11px; font-weight: 800; }
 .candy-compose { background: var(--c-composer); padding: 22px 21px; }
+.candy-compose > form { min-width: 0; max-width: 100%; }
 .candy-compose .candy-titleline { margin-bottom: 8px; }
 .candy-compose .candy-titleline h2 { font-size: 20px; letter-spacing: -.04em; }
 .candy-compose-help { font-size: 12px; color: #706a7f; line-height: 1.55; margin: 0 0 16px; max-width: 34ch; }
 .candy-field-label { display: block; font-size: 10px; line-height: 1.3; font-weight: 900; letter-spacing: .09em; color: #625b75; margin: 15px 0 7px; text-transform: uppercase; }
 .candy-compose input[type="date"], .candy-compose select, .candy-compose textarea { display: block; width: 100%; min-width: 0; padding: 11px 12px; border: 2px solid var(--c-line); border-radius: 9px; background: var(--c-input); color: var(--c-ink); margin: 0 0 12px; font-size: 12px; line-height: 1.35; }
+/* iOS date controls have intrinsic sizing that can escape narrow cards. */
+.candy-compose input[type="date"], .candy-task-edit input[type="date"] {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  min-inline-size: 0;
+  inline-size: 100%;
+  max-inline-size: 100%;
+  min-height: 42px;
+}
+.candy-shell input[type="date"]::-webkit-date-and-time-value { min-width: 0; text-align: left; }
+.candy-shell input[type="date"]::-webkit-datetime-edit { min-width: 0; padding: 0; }
 .candy-compose textarea { resize: vertical; min-height: 86px; max-height: 250px; }
 .candy-compose textarea::placeholder { color: #888293; }
 .candy-levels { display: flex; gap: 7px; margin: 0 0 13px; }
@@ -198,6 +211,7 @@
   .candy-nav { display: none; }
 }
 @media (max-width: 620px) {
+  .candy-compose input[type="date"], .candy-task-edit input[type="date"] { font-size: 16px; }
   .candy-mobile-compose { position: fixed; right: 20px; bottom: max(20px, env(safe-area-inset-bottom)); z-index: 5; display: inline-flex; align-items: center; gap: 5px; border: 2px solid #2d3155; background: #ef7098; color: #2d3155 !important; border-radius: 99px; padding: 12px 16px; font-size: 12px; font-weight: 900; box-shadow: 3px 3px 0 #2d3155; }
   .dark .candy-mobile-compose { background: #ff43d0; border-color: #ff8bea; box-shadow: 0 0 12px #ff43d066; color: #160d29 !important; }
   .candy-app { padding: 16px 13px 50px; }
