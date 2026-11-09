@@ -24,6 +24,7 @@ import {
 } from "./push.js";
 import type {
   Task,
+  Message,
   Member,
   Space,
   CreateTaskPayload,
