@@ -1,4 +1,5 @@
-import { pgTable, uuid, text, timestamp, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import type { TaskRecurrence } from "@todo-app/shared";
+import { pgTable, uuid, text, timestamp, pgEnum, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const taskTypeEnum = pgEnum("task_type", ["critical", "daily"]);
@@ -37,6 +38,8 @@ export const tasks = pgTable("tasks", {
   type: taskTypeEnum("type").notNull().default("daily"),
   priority: taskPriorityEnum("priority").notNull().default("normal"),
   dueDate: timestamp("due_date", { withTimezone: true }),
+  recurrence: jsonb("recurrence").$type<TaskRecurrence>(),
+  previousOccurrenceId: uuid("previous_occurrence_id").unique(),
   assignedTo: uuid("assigned_to")
     .notNull()
     .references(() => members.id, { onDelete: "cascade" }),

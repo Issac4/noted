@@ -5,12 +5,13 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createNodeWebSocket } from "@hono/node-ws";
 import type { WSContext } from "hono/ws";
-import { eq, asc, desc, and, sql } from "drizzle-orm";
+import { eq, asc, desc, and } from "drizzle-orm";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { db } from "./db/index.js";
 import { spaces, members, tasks, pushSubscriptions } from "./db/schema.js";
+import { nextOccurrence, validRecurrence } from "./recurrence.js";
 import { runMigrations } from "./db/migrate.js";
 import { serviceWorkerMiddleware } from "./serviceWorker.js";
 import { pushPreparationFailure } from "./pushFailure.js";
@@ -178,6 +179,7 @@ function serializeTask(row: typeof tasks.$inferSelect): Task {
     note: row.note,
     type: row.type,
     priority: row.priority,
+    recurrence: row.recurrence,
     dueDate: row.dueDate ? row.dueDate.toISOString() : null,
     assignedTo: row.assignedTo,
     createdBy: row.createdBy,
@@ -429,6 +431,9 @@ app.post("/api/tasks", async (c) => {
     return c.json({ error: "Critical tasks need a real deadline date" }, 400);
   }
 
+  if (!validRecurrence(body.recurrence ?? null)) return c.json({ error: "Choose a valid repeat schedule" }, 400);
+  if (body.recurrence && !parsedDueDate) return c.json({ error: "Choose the first deadline for a repeating task" }, 400);
+
   const [created] = await db
     .insert(tasks)
     .values({
@@ -438,6 +443,7 @@ app.post("/api/tasks", async (c) => {
       type: taskType,
       priority,
       dueDate: parsedDueDate,
+      recurrence: body.recurrence ?? null,
       assignedTo: body.assignedTo,
       createdBy: body.createdBy,
       status: "pending",
@@ -568,55 +574,62 @@ app.post("/api/push/test", async (c) => {
 app.patch("/api/tasks/:id", async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json<UpdateTaskPayload>();
-  const [existing] = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1);
-  if (!existing) {
-    return c.json({ error: "Task not found" }, 404);
-  }
-  const nextDueDate = body.dueDate === undefined
-    ? existing.dueDate
-    : body.dueDate ? new Date(body.dueDate) : null;
-  if (nextDueDate && Number.isNaN(nextDueDate.getTime())) {
-    return c.json({ error: "Enter a valid due date" }, 400);
-  }
-  if ((body.type ?? existing.type) === "critical" && !nextDueDate) {
-    return c.json({ error: "Critical tasks need a real deadline date" }, 400);
-  }
-  if (body.priority !== undefined && !["low", "normal", "high"].includes(body.priority)) {
-    return c.json({ error: "Choose a valid task priority" }, 400);
-  }
-
-  const updateData: Record<string, unknown> = {
-    updatedAt: new Date(),
-  };
-
-  if (body.title !== undefined) updateData.title = body.title.trim();
-  if (body.note !== undefined) updateData.note = body.note ? body.note.trim() : null;
-  if (body.type !== undefined) updateData.type = body.type;
-  if (body.priority !== undefined) updateData.priority = body.priority;
-  if (body.dueDate !== undefined) {
-    updateData.dueDate = nextDueDate;
-  }
-  if (body.assignedTo !== undefined) updateData.assignedTo = body.assignedTo;
   if (body.status !== undefined && !["pending", "completed"].includes(body.status)) return c.json({ error: "Choose a valid task status" }, 400);
-  if (body.status !== undefined) {
-    updateData.status = body.status;
-    updateData.completedAt = body.status === "completed"
-      ? sql`CASE WHEN ${tasks.status} <> 'completed' THEN now() ELSE ${tasks.completedAt} END`
-      : null;
-  }
+  if (body.priority !== undefined && !["low", "normal", "high"].includes(body.priority)) return c.json({ error: "Choose a valid task priority" }, 400);
+  if (body.recurrence !== undefined && !validRecurrence(body.recurrence)) return c.json({ error: "Choose a valid repeat schedule" }, 400);
+  if (body.title !== undefined && !body.title.trim()) return c.json({ error: "Task title is required" }, 400);
 
-  const [updated] = await db
-    .update(tasks)
-    .set(updateData)
-    .where(eq(tasks.id, id))
-    .returning();
+  const result = await db.transaction(async tx => {
+    // Serialize completion/reopen requests, including requests from another device.
+    const [existing] = await tx.select().from(tasks).where(eq(tasks.id, id)).for("update");
+    if (!existing) return { error: "Task not found", status: 404 as const };
+    const dueDate = body.dueDate === undefined ? existing.dueDate : body.dueDate ? new Date(body.dueDate) : null;
+    const recurrence = body.recurrence === undefined ? existing.recurrence : body.recurrence;
+    if (dueDate && Number.isNaN(dueDate.getTime())) return { error: "Enter a valid due date", status: 400 as const };
+    if ((body.type ?? existing.type) === "critical" && !dueDate) return { error: "Critical tasks need a real deadline date", status: 400 as const };
+    if (recurrence && !dueDate) return { error: "Choose the first deadline for a repeating task", status: 400 as const };
 
-  if (!updated) {
-    return c.json({ error: "Task not found" }, 404);
-  }
+    let removedId: string | undefined;
+    if (body.status === "pending" && existing.status === "completed") {
+      const [successor] = await tx.select().from(tasks).where(eq(tasks.previousOccurrenceId, id)).for("update");
+      if (successor?.status === "completed") return { error: "A later occurrence is already completed. Use the current occurrence instead.", status: 409 as const };
+      if (successor) {
+        await tx.delete(tasks).where(eq(tasks.id, successor.id));
+        removedId = successor.id;
+      }
+    }
+    const completedAt = new Date();
+    const [updated] = await tx.update(tasks).set({
+      updatedAt: completedAt,
+      ...(body.title !== undefined ? { title: body.title.trim() } : {}),
+      ...(body.note !== undefined ? { note: body.note?.trim() || null } : {}),
+      ...(body.type !== undefined ? { type: body.type } : {}),
+      ...(body.priority !== undefined ? { priority: body.priority } : {}),
+      ...(body.assignedTo !== undefined ? { assignedTo: body.assignedTo } : {}),
+      dueDate, recurrence,
+      ...(body.status !== undefined ? {
+        status: body.status,
+        completedAt: body.status === "completed" ? existing.status === "completed" ? existing.completedAt : completedAt : null,
+      } : {}),
+    }).where(eq(tasks.id, id)).returning();
 
-  const serialized = serializeTask(updated);
+    let next: typeof updated | undefined;
+    if (body.status === "completed" && existing.status === "pending" && updated.recurrence && updated.dueDate) {
+      [next] = await tx.insert(tasks).values({
+        spaceId: updated.spaceId, title: updated.title, note: updated.note,
+        type: updated.type, priority: updated.priority, assignedTo: updated.assignedTo,
+        createdBy: updated.createdBy, recurrence: updated.recurrence,
+        dueDate: nextOccurrence(updated.dueDate, updated.recurrence, completedAt),
+        previousOccurrenceId: updated.id,
+      }).returning();
+    }
+    return { updated, next, removedId };
+  });
+  if ("error" in result) return c.json({ error: result.error }, result.status);
+  const serialized = serializeTask(result.updated);
   broadcast({ type: "task:updated", payload: serialized });
+  if (result.next) broadcast({ type: "task:created", payload: serializeTask(result.next) });
+  if (result.removedId) broadcast({ type: "task:deleted", payload: { id: result.removedId, spaceId: result.updated.spaceId } });
   return c.json(serialized);
 });
 

@@ -1,5 +1,5 @@
 # 📋 Noted: Product Requirements & Architecture Specification
-**A Candy Calendar dashboard for households and groups**
+**A Shigoto task board for households and groups**
 
 > **Open-Source Positioning**: Designed for solo individuals, families, roommates, and groups of friends. Profiles identify the person using a device but are not separate authenticated accounts; tasks are visible to anyone with access to the space.
 
@@ -39,18 +39,22 @@
 * **UI Representation**: Priority and deadline are separate. High-priority tasks stay at the top even without a deadline. Critical alert tasks retain their explicit deadline and alert schedule.
 * **Alert Strategy**: **Daily at 9:00 AM Toronto time until completed, including overdue tasks**. The server checks every minute and catches up after a restart. Daylight saving time is automatic. A persistent task/day record prevents repeating an accepted reminder; failed delivery with no accepted device is retried. Push acceptance does not guarantee immediate device display.
 
-### Module 2: ☀️ Candy Calendar Dashboard
-* The approved #05 Candy Calendar layout has a full-width pastel dashboard and a task composer fixed to the bottom of the device screen. Dark mode uses navy surfaces with cyan and magenta accents.
-* **My focus** shows the active device profile's tasks; **Complete Action · Everyone** includes the entire board and labels task owners.
-* A real Monday–Sunday week strip shows due counts. Selecting a day filters dated tasks; clearing the filter restores important undated work. Previous/next week controls use local calendar dates.
-* Active tasks appear once in **Priority tasks**, **Due soon**, or **Whenever**. Each group has a distinct rose, blue, or green color. Tasks with the earliest dated day within each group are bold and tinted in that group’s color, including ties; undated tasks are not highlighted as due. Completed tasks remain available in collapsed history with a completion date/time and a reopen action. Historical tasks without a recorded completion time say “time not recorded”; timestamps are never guessed from edit times.
-* Tasks support completion, deletion, note editing, priority changes, and deadline changes. The composer recipient selector includes everyone, including the active user. Add person remains in the header; there is no duplicate people panel.
+### Module 2: ☀️ Shigoto Focus Board
+* Calendar/week navigation is removed. The board always shows all pending tasks in the selected My focus / Everyone scope.
+* A clear urgency hierarchy groups tasks once: **Needs attention** (overdue and today, earliest deadline first), **Important** (other high priority or critical work, including undated work), **Coming up** (other future deadlines), and **Whenever** (other undated work).
+* The first task to tackle is highlighted. Group colors distinguish urgency without filling the whole board with badges. The approved Shigoto layout uses four paper-and-ink lanes on desktop, two on tablets, and one on phones, preserving urgency order. Vermilion marks the next action; dark mode uses charcoal and muted paper tones.
+* Deadline countdowns show calendar days left, due today, or days overdue, alongside the actual deadline. The view refreshes every minute and on wake. Larger task titles and subdued supporting text improve scanning.
+* My focus uses the active device profile; Complete Action · Everyone includes every member and shows owners. Live sync, themes, alerts, self-assignment, adding people, and locking remain available.
+* Completed history records actual completion times and supports reopening. Legacy tasks with unknown completion times are labelled honestly.
 
-### Module 3: ✎ Task Composer
-* The screen-bottom composer has a recipient selector including **Me**, High / Normal / Low priority, an optional deadline, and an optional critical deadline alert setting.
-* Natural language parsing recognizes phrases such as `tomorrow`, `Nov 15`, and `!critical`. High priority works without a date; critical alerts require a date.
-* Sending uses the existing API and WebSocket synchronization. Failed requests preserve the draft and show an error. Separate text drafts are maintained per author and recipient.
-* Messaging is removed. Existing message data remains untouched; older clients receive a clear retired-feature response. The composer accounts for the mobile keyboard and safe area; content padding keeps final task rows clear of it.
+### Module 3: ✎ Task Composer & Repeating Tasks
+* The composer stays fixed to the device screen bottom, with assignment and text always visible. Task options expands priority, deadline, recurrence, and critical alerts. The collapsed summary shows selected options.
+* Natural language capture still supports deadlines and notes. Enter sends; Shift+Enter inserts a newline. Failed sends retain the draft.
+* Repeat options: daily, weekly, every two weeks (14 days), every N days (1–3650), and day 1–31 of each month. Repeating tasks require an explicit first deadline. Dates are calculated at 9 AM America/Toronto, including daylight saving changes.
+* Completing an occurrence atomically records its completion and creates one next pending occurrence with the same assignee, creator, note, priority, type, and repeat rule. The schedule stays anchored to the previous deadline; missed dates are skipped, keeping the board clear of backlogs. Early completion advances to the following scheduled date. A monthly date that does not exist uses the last day of that month, then returns to the chosen day the following month.
+* Row locks and a unique previous-occurrence reference prevent duplicate next occurrences when completion requests race. Repeated completion requests preserve the original completion timestamp.
+* Reopening removes the next unfinished occurrence in the same transaction; reopening is rejected if that next occurrence has already been completed. The UI confirms this behavior. Edit the active occurrence to change future repeats; choosing Does not repeat stops further generation. Deleting an active task stops that chain; deleting history does not delete its next active occurrence.
+* Existing message data remains untouched; messaging remains retired.
 
 ---
 
@@ -58,8 +62,8 @@
 
 | Platform | Layout | Interaction |
 | :--- | :--- | :--- |
-| **Mobile PWA** | Dashboard with a compact composer fixed at the screen bottom. | Assignment, priority, deadline and critical alerts stay available in the bottom composer; all header controls remain available. |
-| **Desktop Web** | Full-width dashboard with three task columns and a bottom composer. | C focuses the composer. Send or Enter submits; Shift+Enter adds a new line. Candy Calendar styling with light and neon dark themes. |
+| **Mobile PWA** | Dashboard with a compact composer fixed at the screen bottom. | Assignment stays visible; task options expands priority, deadline, repeats and critical alerts; all header controls remain available. |
+| **Desktop Web** | Four urgency lanes on desktop, two on tablets, and a compact bottom composer. | C focuses the composer. Send or Enter submits; Shift+Enter adds a new line. Shigoto styling with warm paper and charcoal themes. |
 
 ---
 
@@ -86,7 +90,9 @@
     │     ├── note: text? (optional contextual note/dimensions)
     │     ├── type: "critical" | "daily"
     │     ├── priority: "high" | "normal" | "low"
-    │     ├── due_date: timestamp? (required for critical tasks)
+    │     ├── due_date: timestamp? (required for critical or repeating tasks)
+    │     ├── recurrence: json? ({kind: days, interval} or {kind: monthly, day})
+    │     ├── previous_occurrence_id: uuid? (unique; prevents duplicate generation)
     │     ├── assigned_to: uuid (foreign key -> members.id)
     │     ├── created_by: uuid (foreign key -> members.id)
     │     ├── status: "pending" | "completed"
@@ -135,7 +141,13 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 6.1 Container & Deployment Topology (Tiny PC)
+### 6.1 Installed Web App Identity
+* The Shigoto icon is an original SVG paper note/check on a vermilion seal, exported as opaque 180, 192 and 512 pixel PNGs. Versioned icon URLs are used in the manifest, Apple touch link, favicon, and push notification icon. Legacy asset URLs remain available.
+* Manifest ID, start URL and scope stay `/`; display remains standalone. Portrait locking is removed to support desktop and landscape use. Service worker revisions include all public assets so an icon-only change also creates a new worker URL. Theme-color metadata follows the chosen light/dark palette.
+* iOS Home Screen icon refresh is OS-controlled; a newly added install uses the new touch icon after deployment. If an existing install retains the old icon, re-add from Safari and re-enable alerts in that installation. Existing board data remains on the server.
+* macOS Sonoma 14+ supports Safari File → Add to Dock. Each installed app/device needs its own profile selection and notification permission. Confirm physical-device notification delivery separately from local browser layout checks.
+
+### 6.2 Container & Deployment Topology (Tiny PC)
 * **2-Service Docker Compose Architecture**:
   1. `db`: `postgres:16-alpine` configured with an integrated Docker healthcheck (`pg_isready`).
   2. `app`: Single container running Hono, serving both the API/WebSocket server and compiled static frontend assets. Configured with `depends_on: db: condition: service_healthy` to eliminate startup race conditions after power interruptions.

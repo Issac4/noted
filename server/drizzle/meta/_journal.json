@@ -50,6 +50,13 @@
       "when": 1794243479017,
       "tag": "0006_even_marrow",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794623984843,
+      "tag": "0007_mixed_northstar",
+      "breakpoints": true
     }
   ]
 }

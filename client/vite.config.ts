@@ -13,7 +13,7 @@ function sourceFiles(directory: string): string[] {
 }
 // A new worker URL avoids a CDN reusing an older worker on fresh installs.
 const workerRevision = createHash("sha256");
-for (const file of [...sourceFiles(path.resolve(__dirname, "src")), path.resolve(__dirname, "public/sw-push.js"), path.resolve(__dirname, "index.html"), path.resolve(__dirname, "vite.config.ts")].sort()) {
+for (const file of [...sourceFiles(path.resolve(__dirname, "src")), ...sourceFiles(path.resolve(__dirname, "public")), path.resolve(__dirname, "index.html"), path.resolve(__dirname, "vite.config.ts")].sort()) {
   workerRevision.update(path.relative(__dirname, file)).update(readFileSync(file));
 }
 const workerVersion = workerRevision.digest("hex").slice(0, 12);
@@ -26,6 +26,10 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: [
         "icon.svg",
+        "icons/shigoto-v1.svg",
+        "icons/shigoto-v1-180.png",
+        "icons/shigoto-v1-192.png",
+        "icons/shigoto-v1-512.png",
         "apple-touch-icon.png",
         "pwa-192x192.png",
         "pwa-512x512.png",
@@ -34,31 +38,31 @@ export default defineConfig({
       manifest: {
         name: "Noted",
         short_name: "Noted",
-        description: "A Zero-Overhead, High Signal-to-Noise Household & Personal Task Hub",
-        theme_color: "#09090b",
-        background_color: "#09090b",
+        description: "A clear shared task board for households and groups",
+        id: "/",
+        theme_color: "#f3efe5",
+        background_color: "#f3efe5",
         display: "standalone",
-        orientation: "portrait",
         scope: "/",
         start_url: "/",
         icons: [
           {
-            src: "/pwa-192x192.png",
+            src: "/icons/shigoto-v1-192.png",
             sizes: "192x192",
             type: "image/png",
             purpose: "any",
           },
           {
-            src: "/pwa-512x512.png",
+            src: "/icons/shigoto-v1-512.png",
             sizes: "512x512",
             type: "image/png",
-            purpose: "any maskable",
+            purpose: "any",
           },
           {
-            src: "/icon.svg",
-            sizes: "any",
-            type: "image/svg+xml",
-            purpose: "any",
+            src: "/icons/shigoto-v1-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
           },
         ],
       },

@@ -65,6 +65,7 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDarkMode);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", isDarkMode ? "#1b2222" : "#f3efe5");
     localStorage.setItem("todo-theme", isDarkMode ? "dark" : "light");
   }, [isDarkMode]);
 
@@ -152,12 +153,13 @@ export default function App() {
   const updateTask = useMutation({
     mutationFn: async ({ id, patch }: { id: string; patch: UpdateTaskPayload }) => {
       const response = await fetch(`/api/tasks/${id}`, { method: "PATCH", headers: getAuthHeaders(), body: JSON.stringify(patch) });
-      if (!response.ok) throw new Error("Could not update task");
+      if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.error || "Could not update task"); }
       return response.json() as Promise<Task>;
     },
     onMutate: ({ id, patch }) => queryClient.setQueryData<AppStateData>(stateKey, (previous) => previous ? { ...previous, tasks: previous.tasks.map((task) => task.id === id ? { ...task, ...patch, completedAt: patch.status === "completed" && task.status !== "completed" ? new Date().toISOString() : patch.status === "pending" ? null : task.completedAt } : task) } : previous),
     onSuccess: (updated) => queryClient.setQueryData<AppStateData>(stateKey, (previous) => previous ? { ...previous, tasks: previous.tasks.map((task) => task.id === updated.id ? updated : task) } : previous),
-    onError: () => queryClient.invalidateQueries({ queryKey: stateKey }),
+    onError: (error: Error) => setBanner(error.message),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: stateKey }),
   });
 
   const deleteTask = useMutation({
@@ -167,7 +169,7 @@ export default function App() {
       return id;
     },
     onMutate: (id) => queryClient.setQueryData<AppStateData>(stateKey, (previous) => previous ? { ...previous, tasks: previous.tasks.filter((task) => task.id !== id) } : previous),
-    onError: () => queryClient.invalidateQueries({ queryKey: stateKey }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: stateKey }),
   });
 
   async function unlock(enteredPin: string) {

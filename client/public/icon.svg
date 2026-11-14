@@ -1,5 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="112" fill="#09090b"/>
-  <rect x="32" y="32" width="448" height="448" rx="88" fill="#16a34a" fill-opacity="0.14" stroke="#22c55e" stroke-width="12"/>
-  <path d="M168 264L228 324L352 192" fill="none" stroke="#22c55e" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Noted: a paper note and check mark on a vermilion seal">
+  <rect width="512" height="512" fill="#ad3b30"/>
+  <rect x="38" y="38" width="436" height="436" rx="24" fill="none" stroke="#f7edda" stroke-width="8"/>
+  <g transform="rotate(-5 256 256)">
+    <path d="M145 108H309L375 174V404H145Z" fill="#fff8e8"/>
+    <path d="M309 108V174H375" fill="#ead7ba"/>
+    <path d="M190 198H277M190 242H322" fill="none" stroke="#37433f" stroke-width="16" stroke-linecap="square"/>
+    <path d="M194 320L232 354L310 284" fill="none" stroke="#ad3b30" stroke-width="22" stroke-linecap="square" stroke-linejoin="miter"/>
+  </g>
 </svg>

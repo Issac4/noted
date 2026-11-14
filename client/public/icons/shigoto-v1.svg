@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Noted: a paper note and check mark on a vermilion seal">
+  <rect width="512" height="512" fill="#ad3b30"/>
+  <rect x="38" y="38" width="436" height="436" rx="24" fill="none" stroke="#f7edda" stroke-width="8"/>
+  <g transform="rotate(-5 256 256)">
+    <path d="M145 108H309L375 174V404H145Z" fill="#fff8e8"/>
+    <path d="M309 108V174H375" fill="#ead7ba"/>
+    <path d="M190 198H277M190 242H322" fill="none" stroke="#37433f" stroke-width="16" stroke-linecap="square"/>
+    <path d="M194 320L232 354L310 284" fill="none" stroke="#ad3b30" stroke-width="22" stroke-linecap="square" stroke-linejoin="miter"/>
+  </g>
+</svg>

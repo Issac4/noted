@@ -1,5 +1,5 @@
 // Service Worker Push Notification Handler for Noted PWA
-// Direct messages, assigned tasks and critical deadline reminders.
+// Assigned tasks and daily critical reminders.
 // Always show a visible notification, including for a push with no payload.
 
 self.addEventListener("push", (event) => {
@@ -19,7 +19,7 @@ self.addEventListener("push", (event) => {
 
   const options = {
     body: payload.body,
-    icon: "/pwa-192x192.png",
+    icon: "/icons/shigoto-v1-192.png",
     badge: "/pwa-192x192.png",
     tag: payload.tag || "noted-push",
     renotify: true,

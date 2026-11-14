@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { Task } from "@todo-app/shared";
-import { dashboardGroups, dateKey, weekDays, nearestDueIds, completedHistory } from "../src/lib/dashboard.ts";
+import { dashboardGroups, dateKey, weekDays, nearestDueIds, completedHistory, focusGroups, countdown } from "../src/lib/dashboard.ts";
 
 function task(id: string, patch: Partial<Task> = {}): Task {
-  return { id, spaceId: "space", assignedTo: "member", createdBy: "member", title: id, note: null, priority: "normal", type: "daily", status: "pending", completedAt: null, dueDate: null, createdAt: "2026-11-01T09:00:00Z", updatedAt: "2026-11-01T09:00:00Z", ...patch };
+  return { id, spaceId: "space", assignedTo: "member", createdBy: "member", title: id, note: null, priority: "normal", type: "daily", status: "pending", completedAt: null, dueDate: null, recurrence: null, createdAt: "2026-11-01T09:00:00Z", updatedAt: "2026-11-01T09:00:00Z", ...patch };
 }
 test("important undated tasks stay visible and tasks appear in exactly one dashboard group", () => {
   const groups = dashboardGroups([
@@ -20,6 +20,29 @@ test("important undated tasks stay visible and tasks appear in exactly one dashb
   const ids = Object.values(groups).flat().map(t => t.id);
   assert.equal(new Set(ids).size, 6);
   assert.equal(ids.includes("done"), false);
+});
+
+test("focus puts overdue and today before future important work, with no hidden or duplicated tasks", () => {
+  const groups = focusGroups([
+    task("high", { priority: "high" }), task("critical", { type: "critical", dueDate: "2026-12-01T09:00:00" }),
+    task("today", { dueDate: "2026-11-13T09:00:00" }), task("overdue", { priority: "low", dueDate: "2026-11-10T09:00:00" }),
+    task("next", { dueDate: "2026-11-16T09:00:00" }), task("anytime"), task("done", { status: "completed" }),
+  ], new Date("2026-11-13T12:00:00"));
+  assert.deepEqual(groups.urgent.map(t => t.id), ["overdue", "today"]);
+  assert.deepEqual(groups.important.map(t => t.id), ["critical", "high"]);
+  assert.deepEqual(groups.upcoming.map(t => t.id), ["next"]);
+  assert.deepEqual(groups.anytime.map(t => t.id), ["anytime"]);
+  assert.equal(new Set(Object.values(groups).flat().map(t => t.id)).size, 6);
+});
+
+test("countdowns use calendar days, distinguish overdue tasks, and handle DST boundaries", () => {
+  const now = new Date(2026, 2, 7, 23, 55);
+  assert.equal(countdown(null, now), "No deadline");
+  assert.equal(countdown(new Date(2026, 2, 7, 9).toISOString(), now), "Due today");
+  assert.equal(countdown(new Date(2026, 2, 8, 9).toISOString(), now), "1 day left");
+  assert.equal(countdown(new Date(2026, 2, 9, 9).toISOString(), now), "2 days left");
+  assert.equal(countdown(new Date(2026, 2, 6, 9).toISOString(), now), "1 day overdue");
+  assert.equal(countdown(new Date(2026, 2, 5, 9).toISOString(), now), "2 days overdue");
 });
 test("calendar uses a local Monday–Sunday week across month boundaries", () => {
   const days = weekDays(new Date(2026, 10, 1, 0, 15));

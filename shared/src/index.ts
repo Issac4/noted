@@ -1,5 +1,6 @@
 export type TaskType = "critical" | "daily";
 export type TaskPriority = "low" | "normal" | "high";
+export type TaskRecurrence = { kind: "days"; interval: number } | { kind: "monthly"; day: number };
 export type TaskStatus = "pending" | "completed";
 export type MemberRole = "owner" | "member";
 
@@ -28,6 +29,7 @@ export interface Task {
   type: TaskType;
   priority: TaskPriority;
   dueDate: string | null;
+  recurrence: TaskRecurrence | null;
   assignedTo: string;
   createdBy: string;
   status: TaskStatus;
@@ -58,6 +60,7 @@ export interface CreateTaskPayload {
   type?: TaskType;
   priority?: TaskPriority;
   dueDate?: string | null;
+  recurrence?: TaskRecurrence | null;
   assignedTo: string;
   createdBy: string;
 }
@@ -68,6 +71,7 @@ export interface UpdateTaskPayload {
   type?: TaskType;
   priority?: TaskPriority;
   dueDate?: string | null;
+  recurrence?: TaskRecurrence | null;
   assignedTo?: string;
   status?: TaskStatus;
 }
